@@ -37,9 +37,9 @@ import sys
 import os
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                               QLabel, QPushButton, QRadioButton, QGroupBox,
-                              QButtonGroup, QTextEdit, QProgressBar)
+                              QButtonGroup, QTextEdit, QProgressBar,QSystemTrayIcon)
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QPalette, QColor
+from PySide6.QtGui import QFont, QPalette, QColor,QIcon
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -50,9 +50,17 @@ class MainWindow(QMainWindow):
 
     def setup_ui(self):
         """设置主界面"""
-        self.setWindowTitle("钢琴调音专家")
+        self.setWindowTitle("千椻")
+        self.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
         self.setGeometry(100, 100, 1400, 900)
-
+        # 设置系统托盘图标
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            print("系统支持托盘图标")
+            self.tray_icon = QSystemTrayIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"), self)
+            self.tray_icon.show()
+            print("托盘图标已显示")
+        else:
+            print("系统不支持托盘图标")
         # 中央部件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -73,6 +81,10 @@ class MainWindow(QMainWindow):
         # 右边面板 (25%)
         right_panel = self.create_right_panel()
         main_layout.addWidget(right_panel, 2)
+
+        # 设置所有面板都扩展到最大高度
+        main_layout.setAlignment(Qt.AlignBottom)
+
 
     def create_left_panel(self):
         """创建左边面板"""
@@ -118,15 +130,15 @@ class MainWindow(QMainWindow):
         file_layout = QVBoxLayout(self.file_group)
 
         self.file_list = QTextEdit()
-        self.file_list.setMaximumHeight(200)
+        self.file_list.setMaximumHeight(120)
         self.file_list.setPlainText("""📁 最近文件
-• recording1.wav
-• piano_A4.wav
-• test_audio.mp3
+    • recording1.wav
+    • piano_A4.wav
+    • test_audio.mp3
 
-📁 录音记录
-• 2024-01-15.wav
-• session_1.wav""")
+    📁 录音记录
+    • 2024-01-15.wav
+    • session_1.wav""")
         self.file_list.setReadOnly(True)
 
         file_layout.addWidget(self.file_list)
@@ -134,10 +146,40 @@ class MainWindow(QMainWindow):
         # 初始隐藏文件系统
         self.file_group.setVisible(False)
 
+        # 状态信息
+        status_group = QGroupBox("系统状态")
+        status_layout = QVBoxLayout(status_group)
+
+        self.status_display = QTextEdit()
+        self.status_display.setMaximumHeight(200)
+        self.status_display.setPlainText("""📊 当前状态
+• 模式: 实时分析
+• 状态: 等待开始
+• 设备: 默认麦克风
+• 算法: 自适应
+
+💡 调音建议
+• 准备开始音频检测...
+
+⚙️ 参数预览
+• 目标频率: A4 (440Hz)
+• 检测算法: 自适应
+• 灵敏度: 中
+• 置信度: --""")
+        self.status_display.setReadOnly(True)
+
+        status_layout.addWidget(self.status_display)
+        layout.addWidget(status_group)
+
+        # 布局管理 - 使用拉伸因子保持固定高度
         layout.addWidget(mode_group)
         layout.addWidget(self.record_group)
         layout.addWidget(self.file_group)
-        layout.addStretch()
+        layout.addWidget(status_group)
+        layout.setStretchFactor(mode_group, 1)
+        layout.setStretchFactor(self.record_group, 2)
+        layout.setStretchFactor(self.file_group, 2)
+        layout.setStretchFactor(status_group,4)
 
         return panel
 
@@ -185,11 +227,14 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(spectrum_group)
         layout.addWidget(piano_group)
+        layout.setStretchFactor(spectrum_group,6)
+        layout.setStretchFactor(piano_group,4)
 
         return panel
 
+
     def create_right_panel(self):
-        """创建右边面板"""
+        """创建右边面板 - 纯粹的力学调整"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
@@ -198,7 +243,7 @@ class MainWindow(QMainWindow):
         adjust_group = QGroupBox("力学调整")
         adjust_layout = QVBoxLayout(adjust_group)
 
-        # 推杆模拟
+        # 推杆模拟 - 更大的显示
         slider_layout = QVBoxLayout()
         self.slider_display = QLabel("🎚️ 精密推杆调节器\n\n← 偏低 | 准确 | 偏高 →")
         self.slider_display.setAlignment(Qt.AlignCenter)
@@ -207,12 +252,13 @@ class MainWindow(QMainWindow):
                 stop:0 #e74c3c, stop:0.4 #f39c12, stop:0.5 #27ae60,
                 stop:0.6 #f39c12, stop:1 #e74c3c);
             color: white;
-            padding: 80px 20px;
+            padding: 120px 20px;
             border: 2px solid #7f8c8d;
             border-radius: 10px;
             font-weight: bold;
+            font-size: 14px;
         """)
-        self.slider_display.setMinimumHeight(150)
+        self.slider_display.setMinimumHeight(250)
 
         slider_layout.addWidget(self.slider_display)
 
@@ -223,22 +269,24 @@ class MainWindow(QMainWindow):
         coarse_knob.setAlignment(Qt.AlignCenter)
         coarse_knob.setStyleSheet("""
             background-color: #95a5a6;
-            padding: 25px 15px;
-            border-radius: 50px;
+            padding: 40px 20px;
+            border-radius: 60px;
             border: 2px solid #7f8c8d;
             font-weight: bold;
-            min-width: 80px;
+            min-width: 100px;
+            font-size: 12px;
         """)
 
         fine_knob = QLabel("🔘 微调\n(±1音分)")
         fine_knob.setAlignment(Qt.AlignCenter)
         fine_knob.setStyleSheet("""
             background-color: #95a5a6;
-            padding: 20px 10px;
-            border-radius: 40px;
+            padding: 30px 15px;
+            border-radius: 50px;
             border: 2px solid #7f8c8d;
             font-weight: bold;
-            min-width: 70px;
+            min-width: 90px;
+            font-size: 12px;
         """)
 
         knob_layout.addWidget(coarse_knob)
@@ -246,33 +294,12 @@ class MainWindow(QMainWindow):
 
         adjust_layout.addLayout(slider_layout)
         adjust_layout.addLayout(knob_layout)
+        adjust_layout.setStretchFactor(slider_layout,7)
+        adjust_layout.setStretchFactor(knob_layout,3)
 
-        # 状态信息
-        status_group = QGroupBox("系统状态")
-        status_layout = QVBoxLayout(status_group)
-
-        self.status_display = QTextEdit()
-        self.status_display.setMaximumHeight(200)
-        self.status_display.setPlainText("""📊 当前状态
-• 模式: 实时分析
-• 状态: 等待开始
-• 设备: 默认麦克风
-• 算法: 自适应
-
-💡 调音建议
-• 准备开始音频检测...
-
-⚙️ 参数预览
-• 目标频率: A4 (440Hz)
-• 检测算法: 自适应
-• 灵敏度: 中
-• 置信度: --""")
-        self.status_display.setReadOnly(True)
-
-        status_layout.addWidget(self.status_display)
-
+        # 让力学调整组扩展到整个右边面板高度
         layout.addWidget(adjust_group)
-        layout.addWidget(status_group)
+        layout.setStretchFactor(adjust_group,1)
 
         return panel
 
@@ -281,7 +308,7 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # 文件菜单
-        file_menu = menubar.addMenu("📁 文件")
+        file_menu = menubar.addMenu("📁 文件(&F)")
         file_menu.addAction("🆕 新建分析")
         file_menu.addAction("📂 打开文件")
         file_menu.addAction("💾 保存结果")
@@ -290,13 +317,13 @@ class MainWindow(QMainWindow):
         file_menu.addAction("🚪 退出")
 
         # 编辑菜单
-        edit_menu = menubar.addMenu("✏️ 编辑")
+        edit_menu = menubar.addMenu("✏️ 编辑(&E)")
         edit_menu.addAction("⭐ 参数预设")
         edit_menu.addAction("📋 复制数据")
         edit_menu.addAction("🧹 清空记录")
 
         # 视图菜单
-        view_menu = menubar.addMenu("👁️ 视图")
+        view_menu = menubar.addMenu("👁️ 视图(&V)")
         view_menu.addAction("📈 频谱显示选项")
         view_menu.addAction("🎹 钢琴窗主题")
         view_menu.addAction("🎨 界面主题")
@@ -304,14 +331,14 @@ class MainWindow(QMainWindow):
         view_menu.addAction("🖥️ 全屏模式")
 
         # 工具菜单
-        tools_menu = menubar.addMenu("🛠️ 工具")
+        tools_menu = menubar.addMenu("🛠️ 工具(&T)")
         tools_menu.addAction("🎧 音频设备配置")
         tools_menu.addAction("🔊 参考音生成器")
         tools_menu.addAction("⚖️ 频率校准工具")
         tools_menu.addAction("📁 批量文件分析")
 
         # 设置菜单
-        settings_menu = menubar.addMenu("⚙️ 设置")
+        settings_menu = menubar.addMenu("⚙️ 设置(&S)")
         settings_menu.addAction("🎹 钢琴数据库管理")
         settings_menu.addAction("🎻 琴弦密度配置")
         settings_menu.addAction("🎵 音名系统设置")
@@ -320,7 +347,7 @@ class MainWindow(QMainWindow):
         settings_menu.addAction("🔧 高级音频设置")
 
         # 帮助菜单
-        help_menu = menubar.addMenu("❓ 帮助")
+        help_menu = menubar.addMenu("❓ 帮助(&H)")
         help_menu.addAction("📖 用户手册")
         help_menu.addAction("🔍 算法说明")
         help_menu.addAction("⌨️ 快捷键列表")

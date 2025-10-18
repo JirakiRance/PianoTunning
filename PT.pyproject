@@ -10,7 +10,6 @@
         "src/MechanicsEngine.py",
         "src/PianoDebugger.py",
         "src/PianoGenerator.py",
-        "src/PitchDetector.py",
-        "src/piano_tuner.spec"
+        "src/PitchDetector.py"
     ]
 }

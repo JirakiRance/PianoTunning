@@ -13,6 +13,7 @@ sys.path.insert(0, current_dir)  # 添加当前目录
 sys.path.insert(0, ui_path)      # 添加ui文件夹
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 
 try:
     # 从ui文件夹导入MainWindow
@@ -29,6 +30,7 @@ except ImportError as e:
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("千椻调音")
+    app.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
     app.setApplicationVersion("1.0.0")
     window = MainWindow()
     window.show()
