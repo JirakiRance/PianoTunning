@@ -9,18 +9,12 @@ import numpy as np
 import threading
 from queue import Queue
 from datetime import datetime
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Callable, List, Dict, Any,Tuple
 from enum import Enum
 from dataclasses import dataclass
 
 from PitchDetector import PitchDetector, PitchDetectionResult,DetectionTiming
 
-
-# @dataclass
-# class RealtimeData:
-#     """实时传输的数据包"""
-#     pitch_result: PitchResult
-#     audio_frame: np.ndarray # 当前音频帧数据 (用于波形和频谱)
 
 class ProcessingMode(Enum):
     """处理模式枚举"""
@@ -48,6 +42,11 @@ class PitchResult:
     cents_deviation: Optional[float] = None
     method_used: str = ""
 
+@dataclass
+class RealtimeData:
+    """实时传输的数据包"""
+    pitch_result: PitchResult
+    audio_frame: np.ndarray # 当前音频帧数据 (用于波形和频谱)
 
 @dataclass
 class MusicalAnalysisResult:
@@ -61,6 +60,8 @@ class MusicalAnalysisResult:
     tuning_quality: float  # 调音质量 0-1 (如果有目标频率)
     confidence_level: float  # 总体置信度
     valid_frame_ratio: float  # 有效帧比例
+    # --- 新增：用于整体波形绘制 ---
+    full_audio_data: Optional[np.ndarray] = None
 
 @dataclass
 class AnalysisTiming:
@@ -90,7 +91,7 @@ class AudioDetector:
                  pitch_algorithm=PitchDetectionAlgorithm.PYIN_ENHANCED):
         self.analysis_start_time = 0    # 新增的进度功能
         self.progress_callback = None
-
+        self.target_frequency: Optional[float] = None
         # 音高检测器
         self.pitch_detector = PitchDetector(
             sample_rate=sample_rate,
@@ -149,7 +150,8 @@ class AudioDetector:
     # ==================== 公共方法 ====================
 
     def start_realtime_analysis(self, pitch_callback: Callable[[PitchResult], None],
-                                save_recording: bool = True) -> bool:
+                                save_recording: bool = True,
+                                target_frequency: Optional[float] = None) -> bool:
         """开始实时分析"""
         try:
             if self.is_recording:
@@ -157,8 +159,14 @@ class AudioDetector:
                 return False
 
             self.current_mode = ProcessingMode.REALTIME_RECORDING
+
+            # 不再检查 save_recording，始终创建文件
+            self._create_recording_file()
+            # ---------------------------------
+
             self.is_recording = True
             self.pitch_callback = pitch_callback
+            self.target_frequency = target_frequency    # 新增的AudioDetecot的目标频率
 
             if save_recording:
                 self._create_recording_file()
@@ -222,8 +230,11 @@ class AudioDetector:
 
             # 音乐统计分析
             analysis_result = self._calculate_musical_statistics(
-                pitch_results, file_path, duration, sr, target_frequency
+                pitch_results, file_path, duration, sr, target_frequency,
+                full_audio_data=audio_data
             )
+            # 附加完整音频数据
+            analysis_result.full_audio_data = audio_data
 
             self.analysis_results[file_path] = analysis_result
             self.is_processing = False
@@ -350,20 +361,41 @@ class AudioDetector:
                     chunk = self.audio_buffer.get_nowait()
                     audio_accumulator = np.concatenate([audio_accumulator, chunk])
 
+                #     if len(audio_accumulator) >= buffer_size:
+                #         process_data = audio_accumulator[:buffer_size]
+                #         audio_accumulator = audio_accumulator[buffer_size:]
+
+                #         pitch_result = self._detect_pitch(process_data)
+                #         if pitch_result and self.pitch_callback:
+                #             self.pitch_callback(pitch_result)
+                # time.sleep(0.01)
+                # 修改了返回逻辑，需要原始数据以绘制频谱
                     if len(audio_accumulator) >= buffer_size:
                         process_data = audio_accumulator[:buffer_size]
                         audio_accumulator = audio_accumulator[buffer_size:]
 
-                        pitch_result = self._detect_pitch(process_data)
-                        if pitch_result and self.pitch_callback:
-                            self.pitch_callback(pitch_result)
+                        # 接收修改后的返回
+                        detection_output = self._detect_pitch(
+                            audio_data=process_data,
+                            target_freq=self.target_frequency
+                        )
+
+                        if detection_output and self.pitch_callback:
+                            pitch_result, audio_frame = detection_output # <-- 解包
+
+                            # 封装 RealtimeData
+                            realtime_data = RealtimeData(
+                                pitch_result=pitch_result,
+                                audio_frame=audio_frame
+                            )
+                            self.pitch_callback(realtime_data) # <-- 传递 RealtimeData
                 time.sleep(0.01)
             except Exception as e:
                 print(f"处理循环错误: {e}")
                 time.sleep(0.1)
 
     def _detect_pitch(self, audio_data: np.ndarray, target_freq: Optional[float] = None,
-                      frame_index: int = 0, total_frames: int = 0) -> Optional[PitchResult]:
+                      frame_index: int = 0, total_frames: int = 0) -> Optional[Tuple[PitchResult, np.ndarray]]:
         """音高检测 - 带进度和计时"""
         start_time = time.time()
 
@@ -402,14 +434,17 @@ class AudioDetector:
             self.progress_callback(progress)
 
         if result:
-            return PitchResult(
+            cents = self.calculate_cents_deviation(result.frequency, target_freq) if target_freq else None
+            pitch_result = PitchResult(
                 frequency=result.frequency,
                 confidence=result.confidence,
                 timestamp=time.time(),
                 target_frequency=target_freq,
-                cents_deviation=self.calculate_cents_deviation(result.frequency, target_freq) if target_freq else None,
+                cents_deviation=cents,
                 method_used=result.method_used
             )
+            # 返回 PitchResult 和 原始音频数据
+            return (pitch_result, audio_data) # <-- 修改返回类型
         return None
 
     def _analyse_audio_data(self, audio_data: np.ndarray, sample_rate: int,
@@ -427,8 +462,15 @@ class AudioDetector:
             end_idx = start_idx + frame_size
             frame = audio_data[start_idx:end_idx]
 
-            pitch_result = self._detect_pitch(frame, target_freq, frame_index, total_frames)
-            if pitch_result:
+            # pitch_result = self._detect_pitch(frame, target_freq, frame_index, total_frames)
+            # if pitch_result:
+            #     pitch_result.timestamp = start_idx / sample_rate
+            #     pitch_results.append(pitch_result)
+            # _detect_pitch 现在返回 (PitchResult, audio_data) 或 None
+            detection_output = self._detect_pitch(frame, target_freq, frame_index, total_frames)
+            if detection_output:
+                pitch_result, _ = detection_output # <-- 关键修改：正确解包，忽略 audio_data
+                # 在文件分析模式下，重新计算时间戳
                 pitch_result.timestamp = start_idx / sample_rate
                 pitch_results.append(pitch_result)
 
@@ -468,7 +510,8 @@ class AudioDetector:
 
     def _calculate_musical_statistics(self, pitch_results: List[PitchResult], file_path: str,
                                       duration: float, sample_rate: float,
-                                      target_frequency: Optional[float] = None) -> MusicalAnalysisResult:
+                                      target_frequency: Optional[float] = None,
+                                      full_audio_data: Optional[np.ndarray] = None) -> MusicalAnalysisResult:
         """计算音乐统计信息"""
         if not pitch_results:
             return MusicalAnalysisResult(
@@ -480,7 +523,8 @@ class AudioDetector:
                 stability=0.0,
                 tuning_quality=0.0,
                 confidence_level=0.0,
-                valid_frame_ratio=0.0
+                valid_frame_ratio=0.0,
+                full_audio_data=full_audio_data
             )
 
         # 有效结果筛选
@@ -497,7 +541,8 @@ class AudioDetector:
                 stability=0.0,
                 tuning_quality=0.0,
                 confidence_level=0.0,
-                valid_frame_ratio=valid_frame_ratio
+                valid_frame_ratio=valid_frame_ratio,
+                full_audio_data=full_audio_data
             )
 
         # 提取频率和置信度
@@ -527,7 +572,8 @@ class AudioDetector:
             stability=stability,
             tuning_quality=tuning_quality,
             confidence_level=confidence_level,
-            valid_frame_ratio=valid_frame_ratio
+            valid_frame_ratio=valid_frame_ratio,
+            full_audio_data=full_audio_data
         )
 
     def _find_dominant_frequency(self, frequencies: np.ndarray, confidences: np.ndarray) -> float:

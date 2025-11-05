@@ -1,7 +1,7 @@
 # This Python file uses the following encoding: utf-8
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow,QFileDialog,QListWidget,QListWidgetItem
 
 # Important:
 # You need to run the following command to generate the ui_form.py file
@@ -19,18 +19,29 @@ project_root=os.path.dirname(current_dir)
 src_path = os.path.join(project_root, 'src')
 sys.path.append(src_path)
 
-from PySide6.QtCore import QFile
+from PySide6.QtCore import QFile,QStandardPaths,QDir
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtWidgets import  QPushButton, QLabel
+from PySide6.QtWidgets import  QPushButton, QLabel,QFileDialog,QLineEdit,QProgressBar
 from PySide6.QtWidgets import QSizePolicy,QComboBox
+from PySide6.QtGui import QAction
+import numpy as np
+from datetime import datetime
 
 # 导入音频检测模块
 try:
-    from AudioDetector import AudioDetector, PitchDetectionAlgorithm,PitchResult
+    from AudioDetector import AudioDetector, PitchDetectionAlgorithm,PitchResult,RealtimeData,AnalysisProgress,MusicalAnalysisResult
     AUDIO_MODULES_AVAILABLE = True
 except ImportError as e:
     print(f"导入音频模块失败: {e}")
     AUDIO_MODULES_AVAILABLE = False
+
+# 频谱绘制模块
+try:
+    from SpectrumWidget import SpectrumWidget
+    SPECTRUM_WIDGET_AVAILABLE = True
+except ImportError as e:
+    print(f"导入 SpectrumWidget 失败: {e}")
+    SPECTRUM_WIDGET_AVAILABLE = False
 
 # 导入钢琴生成器模块
 try:
@@ -60,7 +71,8 @@ from PySide6.QtGui import QFont, QPalette, QColor,QIcon
 # ==================== 音高信号类 ====================
 class PitchSignal(QObject):
     """用于从工作线程向主线程传递音高结果的信号"""
-    pitch_detected = Signal(PitchResult)
+    # pitch_detected = Signal(PitchResult)
+    pitch_detected = Signal(RealtimeData)
 
 #==================== 主窗口 ========================
 class MainWindow(QMainWindow):
@@ -96,11 +108,18 @@ class MainWindow(QMainWindow):
         # self.setup_menu_bar()
         # self.connect_signals()
 
-        # 1. UI 基础设置
+        # 0. UI 基础设置
         super().__init__()
 
+        # 1.控件
         # 用于缓存状态消息的静态列表
         self._status_message_cache = []
+        # 存储分析完需要删除的文件路径
+        self.temp_files_to_delete = []
+        # 保存分析结果的控制
+        self.settings_auto_prompt_save = True
+        # 默认开启保存录音文件
+        self.settings_save_recording_file = True
 
         # 2. 声明数据模型和核心模块实例 (在 setup_ui 调用前完成)
         self.audio_detector = None     # 存储 AudioDetector 实例
@@ -108,6 +127,7 @@ class MainWindow(QMainWindow):
         self.piano_generator = None    # PianoGenerator 实例
         self.target_key: Optional[PianoKey] = None # 当前调律的目标键
         self.default_target_note_name = "A4"
+        self.current_analysis_folder: Optional[str] = None  # 新增文件系统属性
 
         # 3. 初始化核心系统 (只声明，不进行状态更新)
         # 注意：这里调用 init_audio_system 和 init_piano_system 时，它们内部的 update_status 仍会失败。
@@ -158,6 +178,8 @@ class MainWindow(QMainWindow):
         """初始化 AudioDetector 实例和连接回调"""
         if AUDIO_MODULES_AVAILABLE:
             try:
+                # 获取默认录音输出路径
+                output_dir = self._get_default_recording_path()
                 # 使用默认参数初始化 AudioDetector
                 self.audio_detector = AudioDetector(
                     sample_rate=44100,
@@ -165,7 +187,8 @@ class MainWindow(QMainWindow):
                     hop_length=512,
                     # 可以根据配置界面选择输入设备，这里先用默认设备2
                     input_device=2,
-                    pitch_algorithm=PitchDetectionAlgorithm.AUTOCORR # 默认使用AUTOCORR,有一定准确度，且响应极快
+                    pitch_algorithm=PitchDetectionAlgorithm.AUTOCORR, # 默认使用AUTOCORR,有一定准确度，且响应极快
+                    output_dir=output_dir
                 )
                 self.update_status("音频系统初始化成功，算法：AUTOCORR")
 
@@ -226,8 +249,8 @@ class MainWindow(QMainWindow):
         mode_group = QGroupBox("分析模式")
         mode_layout = QVBoxLayout(mode_group)
 
-        self.mode_realtime = QRadioButton("● 实时分析")
-        self.mode_file = QRadioButton("○ 文件分析")
+        self.mode_realtime = QRadioButton("\t实时分析")
+        self.mode_file = QRadioButton("\t文件分析")
         self.mode_realtime.setChecked(True)
 
         mode_layout.addWidget(self.mode_realtime)
@@ -247,7 +270,7 @@ class MainWindow(QMainWindow):
 
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
-        btn_layout.addWidget(self.pause_btn)
+        # btn_layout.addWidget(self.pause_btn) 暂停功能不提供了
 
         record_layout.addLayout(btn_layout)
 
@@ -255,26 +278,76 @@ class MainWindow(QMainWindow):
         self.duration_label = QLabel("⏱ 时长: 00:00")
         record_layout.addWidget(self.duration_label)
 
+        # --- 新增：进度条 ---
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setVisible(False) # 默认隐藏
+        self.progress_bar.setFormat("分析进度: %p%")
+        record_layout.addWidget(self.progress_bar)
+        # ------------------
+
+        # 文件系统 (文件模式) 旧的文件系统，用QTextEdit占位置
+    #     self.file_group = QGroupBox("文件系统")
+    #     file_layout = QVBoxLayout(self.file_group)
+
+    #     # 新增：文件选择按钮
+    #     self.select_file_btn = QPushButton("📂 选择音频文件并分析")
+    #     file_layout.addWidget(self.select_file_btn)
+
+    #     self.file_list = QTextEdit()
+    #     self.file_list.setMaximumHeight(120)
+    #     self.file_list.setPlainText("""📁 最近文件
+    # • recording1.wav
+    # • piano_A4.wav
+    # • test_audio.mp3
+
+    # 📁 录音记录
+    # • 2024-01-15.wav
+    # • session_1.wav""")
+    #     self.file_list.setReadOnly(True)
+
+    #     file_layout.addWidget(self.file_list)
         # 文件系统 (文件模式)
-        self.file_group = QGroupBox("文件系统")
+        self.file_group = QGroupBox("文件分析系统")
         file_layout = QVBoxLayout(self.file_group)
+        # 1. 文件夹路径显示和选择按钮
+        # folder_layout = QHBoxLayout()
+        # self.select_folder_btn = QPushButton("📂 选择文件夹")
+        # self.folder_path_label = QLabel("当前目录: 未选择")
+        # self.folder_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse) # 路径可复制
+        # folder_layout.addWidget(self.select_folder_btn)
+        # folder_layout.addWidget(self.folder_path_label)
+        # file_layout.addLayout(folder_layout)
+        # --- 1. 文件夹路径输入框和选择按钮 ---
+        folder_path_layout = QHBoxLayout()
+        self.select_folder_btn = QPushButton("📂 更改目录")
 
-        self.file_list = QTextEdit()
-        self.file_list.setMaximumHeight(120)
-        self.file_list.setPlainText("""📁 最近文件
-    • recording1.wav
-    • piano_A4.wav
-    • test_audio.mp3
+        # 使用 QLineEdit 显示绝对路径
+        self.folder_path_edit = QLineEdit()
+        self.folder_path_edit.setReadOnly(True) # 不允许手动编辑
 
-    📁 录音记录
-    • 2024-01-15.wav
-    • session_1.wav""")
-        self.file_list.setReadOnly(True)
+        folder_path_layout.addWidget(self.folder_path_edit,5)
+        folder_path_layout.addWidget(self.select_folder_btn,2)
+        file_layout.addLayout(folder_path_layout)
 
-        file_layout.addWidget(self.file_list)
+        # 2. 文件列表 (QListWidget)
+        self.file_list_widget = QListWidget()
+        self.file_list_widget.setMinimumHeight(120)
+        file_layout.addWidget(self.file_list_widget)
+
+        # 3. 开始分析按钮
+        self.start_analysis_btn = QPushButton("▶ 开始文件分析")
+        self.start_analysis_btn.setEnabled(False) # 默认禁用，直到选中文件
+        # 移除旧的 self.select_file_btn ,添加新的start_analysis_btn
+        file_layout.addWidget(self.start_analysis_btn)
+
+
 
         # 初始隐藏文件系统
         self.file_group.setVisible(False)
+
+        # --- 初始设置默认路径 ---
+        self._set_default_analysis_folder()
+        # ------------------------
 
         # 状态信息
         status_group = QGroupBox("系统状态")
@@ -306,12 +379,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.record_group)
         layout.addWidget(self.file_group)
         layout.addWidget(status_group)
+
         layout.setStretchFactor(mode_group, 1)
         layout.setStretchFactor(self.record_group, 2)
-        layout.setStretchFactor(self.file_group, 2)
+        layout.setStretchFactor(self.file_group, 3)
         layout.setStretchFactor(status_group,4)
 
         return panel
+
+
 
     def create_center_panel(self):
         """创建中间面板"""
@@ -323,17 +399,25 @@ class MainWindow(QMainWindow):
         spectrum_group = QGroupBox("频谱波图")
         spectrum_layout = QVBoxLayout(spectrum_group)
 
-        self.spectrum_display = QLabel("实时频谱显示区域\n(频率波形可视化)")
-        self.spectrum_display.setAlignment(Qt.AlignCenter)
-        self.spectrum_display.setStyleSheet("""
-            background-color: #2c3e50;
-            color: white;
-            padding: 50px;
-            border: 2px solid #34495e;
-            border-radius: 8px;
-            font-size: 14px;
-        """)
-        self.spectrum_display.setMinimumHeight(300)
+        # 占位置用的测试Label
+        # self.spectrum_display = QLabel("实时频谱显示区域\n(频率波形可视化)")
+        # self.spectrum_display.setAlignment(Qt.AlignCenter)
+        # self.spectrum_display.setStyleSheet("""
+        #     background-color: #2c3e50;
+        #     color: white;
+        #     padding: 50px;
+        #     border: 2px solid #34495e;
+        #     border-radius: 8px;
+        #     font-size: 14px;
+        # """)
+        # self.spectrum_display.setMinimumHeight(300)
+        # 替换 QLabel 为 SpectrumWidget
+        if SPECTRUM_WIDGET_AVAILABLE and self.audio_detector:
+            self.spectrum_widget = SpectrumWidget(self.audio_detector.sample_rate)
+            self.spectrum_display = self.spectrum_widget # 保持名称兼容，但指向 widget
+        else:
+            self.spectrum_display = QLabel("实时频谱显示区域\n(SpectrumWidget不可用)")
+            self.spectrum_display.setAlignment(Qt.AlignCenter)
 
         spectrum_layout.addWidget(self.spectrum_display)
 
@@ -498,6 +582,22 @@ class MainWindow(QMainWindow):
 
         # 设置菜单
         settings_menu = menubar.addMenu("⚙️ 设置(&S)")
+
+        # 分析摘要保存
+        self.action_toggle_save_prompt = QAction("分析完成保存分析摘要", self)
+        self.action_toggle_save_prompt.setCheckable(True)
+        self.action_toggle_save_prompt.setChecked(self.settings_auto_prompt_save)
+        self.action_toggle_save_prompt.triggered.connect(self._toggle_save_prompt_setting) # <-- 连接到正确的提示方法
+        # 录音文件保存
+        self.action_toggle_save_recording = QAction("分析完成保存录音文件", self)
+        self.action_toggle_save_recording.setCheckable(True)
+        self.action_toggle_save_recording.setChecked(self.settings_save_recording_file)
+        self.action_toggle_save_recording.triggered.connect(self._toggle_save_recording_setting)
+
+        # 加入设置
+        settings_menu.addAction(self.action_toggle_save_recording)
+        settings_menu.addAction(self.action_toggle_save_prompt)
+
         settings_menu.addAction("🎹 钢琴数据库管理")
         settings_menu.addAction("🎻 琴弦密度配置")
         settings_menu.addAction("🎵 音名系统设置")
@@ -513,6 +613,17 @@ class MainWindow(QMainWindow):
         help_menu.addSeparator()
         help_menu.addAction("ℹ️ 关于")
 
+    def _toggle_save_prompt_setting(self):
+            """切换分析完成后是否弹出保存对话框的设置"""
+            self.settings_auto_prompt_save = self.action_toggle_save_prompt.isChecked()
+            state = "开启" if self.settings_auto_prompt_save else "关闭"
+            self.update_status(f"分析完成弹出保存提示功能已{state}")
+    def _toggle_save_recording_setting(self):
+            """切换实时分析时是否保存录音文件的设置"""
+            self.settings_save_recording_file = self.action_toggle_save_recording.isChecked()
+            state = "开启" if self.settings_save_recording_file else "关闭"
+            self.update_status(f"实时分析保存录音文件功能已{state}")
+
     def connect_signals(self):
         """连接信号槽"""
         # 模式
@@ -523,6 +634,14 @@ class MainWindow(QMainWindow):
         self.start_btn.clicked.connect(self.on_start_recording)
         self.stop_btn.clicked.connect(self.on_stop_recording)
         self.pause_btn.clicked.connect(self.on_pause_recording)
+        # # 文件分析按钮
+        # if hasattr(self, 'select_file_btn'):
+        #     self.select_file_btn.clicked.connect(self.on_analyse_file_clicked)
+        # 文件分析系统连接
+        self.select_folder_btn.clicked.connect(self.on_select_folder_clicked)
+        # 列表项选中时，启用分析按钮
+        self.file_list_widget.itemSelectionChanged.connect(self.on_file_selection_changed)
+        self.start_analysis_btn.clicked.connect(self.on_start_file_analysis_clicked)
         # 实时模式下，禁用暂停按钮
         self.pause_btn.setEnabled(False) # 实时录音/处理线程模型下，暂停逻辑较复杂，先禁用
 
@@ -534,6 +653,259 @@ class MainWindow(QMainWindow):
             # 2. 连接 PianoWidget 鼠标点击事件
             self.piano_widget.key_clicked.connect(self.on_note_selector_changed) # 鼠标点击也使用相同的槽函数
 
+    def _get_default_recording_path(self) -> str:
+        """获取项目默认的录音/分析文件夹路径：工作路径/recordings"""
+        # 获取当前文件所在目录的上级目录 (项目根目录)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+
+        # 目标路径：[Project_Root]/recordings
+        default_path = os.path.join(project_root, 'recordings')
+
+        # 确保目录存在
+        if not os.path.exists(default_path):
+            try:
+                os.makedirs(default_path)
+            except Exception as e:
+                # 如果创建失败，使用用户文档目录作为备用
+                print(f"创建默认目录失败: {e}. 使用文档目录备用。")
+                default_path = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+
+        return default_path
+
+    def _set_default_analysis_folder(self):
+        """设置默认分析文件夹路径，更新 UI 并加载文件列表"""
+        default_folder = self._get_default_recording_path()
+        self.current_analysis_folder = default_folder
+
+        # 更新 QLineEdit
+        if hasattr(self, 'folder_path_edit'):
+            self.folder_path_edit.setText(default_folder)
+
+        self.update_file_list(default_folder)
+        self.update_status(f"文件分析默认目录已加载：{default_folder}")
+
+    # 为了绘制频谱，这段就注释了
+    # def on_analyse_file_clicked(self):
+    #     """处理文件分析模式下的文件选择和分析"""
+    #     if not self.audio_detector or not self.piano_generator:
+    #         self.update_status("错误：音频或钢琴模块未初始化")
+    #         return
+    #     # 弹出文件选择对话框
+    #     file_dialog = QFileDialog(self, "选择音频文件", os.getcwd(), "音频文件 (*.wav *.mp3 *.flac)")
+    #     if file_dialog.exec():
+    #         file_path = file_dialog.selectedFiles()[0]
+    #         self.update_status(f"开始分析文件: {os.path.basename(file_path)}")
+    #         # 获取当前目标频率
+    #         current_target_freq = self.target_key.frequency if self.target_key else None
+    #         # 执行同步文件分析
+    #         analysis_result = self.audio_detector.analyse_audio_file(
+    #             file_path=file_path,
+    #             target_frequency=current_target_freq
+    #         )
+    #         if analysis_result:
+    #             self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
+
+    #             # --- 关键：文件分析结果可视化 ---
+    #             # 为了绘制频谱，我们需要整个音频文件的FFT，或者在分析时就将分帧数据缓存。
+    #             # 由于 AudioDetector.analyse_audio_file 仅返回统计结果，我们不能直接获得帧数据。
+    #             # 暂时：仅显示最终结果，并提示用户切换到实时模式查看波形。
+
+    #             # TODO: (未来优化) 修改 AudioDetector.analyse_audio_file，让其返回处理后的波形/频谱帧数据列表。
+
+    #             # 临时处理：更新状态和推杆（使用平均偏差）
+    #             mean_cents = np.mean([r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None])
+    #             self._update_slider_display(mean_cents)
+    #         else:
+    #             self.update_status("文件分析失败。")
+    # on_analyse_file_clicked改名为on_start_file_analysis_clicked
+    # def on_analyse_file_clicked(self):
+    #     """
+    #     处理文件分析模式下的文件选择和分析。
+    #     分析完成后，显示整体波形图和平均音分偏差。
+    #     """
+    #     if not self.audio_detector or not self.piano_generator:
+    #         self.update_status("错误：音频或钢琴模块未初始化")
+    #         return
+
+    #     # 弹出文件选择对话框
+    #     file_dialog = QFileDialog(self, "选择音频文件", os.getcwd(), "音频文件 (*.wav *.mp3 *.flac)")
+    #     if file_dialog.exec():
+    #         file_path = file_dialog.selectedFiles()[0]
+    #         self.update_status(f"开始分析文件: {os.path.basename(file_path)}")
+
+    #         # 获取当前目标频率
+    #         current_target_freq = self.target_key.frequency if self.target_key else None
+
+    #         # 执行同步文件分析
+    #         analysis_result = self.audio_detector.analyse_audio_file(
+    #             file_path=file_path,
+    #             target_frequency=current_target_freq
+    #         )
+
+    #         if analysis_result:
+    #             # 1. 更新状态信息
+    #             self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
+
+    #             # 2. 更新推杆显示（使用平均偏差）
+    #             # 排除 None 值后计算平均音分偏差
+    #             cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
+    #             if cents_values:
+    #                 mean_cents = np.mean(cents_values)
+    #                 self._update_slider_display(mean_cents)
+    #             else:
+    #                 self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
+
+    #             # 3. 绘制整体波形图 (文件分析的核心可视化)
+    #             if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
+    #                 # 传入完整的音频数据，并标记为整体图模式 (is_full_file=True)
+    #                 self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+    #             else:
+    #                 self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
+    #         else:
+    #             self.update_status("文件分析失败。")
+
+    def progress_update_callback(self, progress: AnalysisProgress):
+        """接收 AudioDetector 发送的进度信息并更新 QProgressBar"""
+
+        if hasattr(self, 'progress_bar'):
+            percentage = int(progress.progress_percentage)
+            self.progress_bar.setValue(percentage)
+
+            # 更新状态栏显示当前分析算法和剩余时间
+            status_msg = (f"分析中: {progress.current_algorithm} | "
+                          f"进度: {percentage:.1f}% | "
+                          f"剩余: {progress.estimated_remaining_time:.1f}s")
+            self.update_status(status_msg)
+
+            # 强制 Qt 处理事件，确保进度条实时更新
+            QApplication.processEvents()
+
+
+    def on_start_file_analysis_clicked(self):
+        """
+        处理文件分析模式下的文件选择和分析。
+        分析完成后，显示整体波形图和平均音分偏差。
+        """
+        if not self.audio_detector or not self.piano_generator:
+            self.update_status("错误：音频或钢琴模块未初始化")
+            return
+
+        selected_items = self.file_list_widget.selectedItems()
+        if not selected_items or not hasattr(self, 'current_analysis_folder'):
+            self.update_status("请先选择一个文件并确保已选择文件夹。")
+            return
+        # 构造完整文件路径
+        selected_file_name = selected_items[0].text()
+        file_path = os.path.join(self.current_analysis_folder, selected_file_name)
+
+        self.update_status(f"开始分析文件: {selected_file_name}")
+
+        # --- 进度和按钮控制开始 ---
+        self.start_analysis_btn.setEnabled(False) # 禁用开始按钮，防止重复点击
+        self.select_folder_btn.setEnabled(False) # 禁用更改目录
+        self.mode_realtime.setEnabled(False) # <--- 禁用实时模式按钮
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True) # 显示进度条
+        self.audio_detector.set_progress_callback(self.progress_update_callback) # 设置进度回调
+        # ---------------------------
+
+        # 获取当前目标频率
+        current_target_freq = self.target_key.frequency if self.target_key else None
+        start_time = time.time() # <-- 记录开始时间
+        try:
+            # 执行同步文件分析
+            analysis_result = self.audio_detector.analyse_audio_file(
+                file_path=file_path,
+                target_frequency=current_target_freq
+            )
+            total_analysis_time = time.time() - start_time # <-- 计算总耗时
+
+            # if file_dialog.exec():
+            #     file_path = file_dialog.selectedFiles()[0]
+            #     self.update_status(f"开始分析文件: {os.path.basename(file_path)}")
+
+            #     # 获取当前目标频率
+            #     current_target_freq = self.target_key.frequency if self.target_key else None
+
+            #     # 执行同步文件分析
+            #     analysis_result = self.audio_detector.analyse_audio_file(
+            #         file_path=file_path,
+            #         target_frequency=current_target_freq
+            #     )
+
+            if analysis_result:
+                # 1. 更新状态信息
+                self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
+
+                # 2. 更新推杆显示（使用平均偏差）
+                # 排除 None 值后计算平均音分偏差
+                cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
+                if cents_values:
+                    mean_cents = np.mean(cents_values)
+                    self._update_slider_display(mean_cents)
+                else:
+                    self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
+
+                # 3. 绘制整体波形图 (文件分析的核心可视化)
+                if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
+                    # 传入完整的音频数据，并标记为整体图模式 (is_full_file=True)
+                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+                else:
+                    self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
+                # --- 调用后分析结果保存的处理逻辑 ---
+                self._handle_post_analysis(analysis_result, file_path, total_analysis_time) # <-- 传递耗时
+                # ----------------------
+            else:
+                self.update_status("文件分析失败。")
+        except Exception as e:
+            self.update_status(f"分析过程中发生错误: {e}")
+        finally:
+            # --- 进度和按钮控制结束 ---
+            self.audio_detector.set_progress_callback(None) # 清除回调
+            self.progress_bar.setVisible(False) # 隐藏进度条
+            self.progress_bar.setValue(0)
+            self.start_analysis_btn.setEnabled(True) # 恢复开始按钮
+            self.select_folder_btn.setEnabled(True) # 恢复更改目录
+            self.mode_realtime.setEnabled(True) # <--- 恢复实时模式按钮
+
+    def on_select_folder_clicked(self):
+        """打开文件夹对话框，选择分析目录，并填充文件列表"""
+        # 使用 QFileDialog.getExistingDirectory()
+        # folder_path = QFileDialog.getExistingDirectory(self, "选择包含音频文件的文件夹", os.getcwd())
+        folder_path = QFileDialog.getExistingDirectory(self, "选择包含音频文件的文件夹", self.current_analysis_folder or os.getcwd())
+
+        if folder_path:
+            self.current_analysis_folder = folder_path
+            # self.folder_path_label.setText(f"当前目录: {os.path.basename(folder_path)}")
+            # 更新 QLineEdit
+            if hasattr(self, 'folder_path_edit'):
+                self.folder_path_edit.setText(folder_path)
+
+            self.file_list_widget.clear()
+            self.update_file_list(folder_path)
+            self.update_status(f"已加载文件夹: {os.path.basename(folder_path)}")
+        else:
+            self.update_status("未选择文件夹。")
+
+    def update_file_list(self, folder_path: str):
+        """根据文件夹路径，筛选音频文件并填充 QListWidget"""
+        audio_extensions = ('.wav', '.mp3', '.flac', '.aiff', '.ogg') # 识别的音频扩展名
+        self.file_list_widget.clear()
+
+        try:
+            for item_name in os.listdir(folder_path):
+                if item_name.lower().endswith(audio_extensions):
+                    # 仅添加文件名
+                    QListWidgetItem(item_name, self.file_list_widget)
+        except Exception as e:
+            self.update_status(f"读取文件列表失败: {e}")
+
+    def on_file_selection_changed(self):
+        """文件选择状态改变时，更新开始分析按钮的状态"""
+        # 只要有选中项，就启用分析按钮
+        is_selected = len(self.file_list_widget.selectedItems()) > 0
+        self.start_analysis_btn.setEnabled(is_selected)
 
     def on_mode_changed(self):
         """模式切换"""
@@ -541,6 +913,9 @@ class MainWindow(QMainWindow):
             self.record_group.setVisible(True)
             self.file_group.setVisible(False)
             self.update_status("切换到实时分析模式")
+            # 清除频谱显示
+            if hasattr(self, 'spectrum_widget'):
+                self.spectrum_widget.update_frame(np.array([]))
         else:
             self.record_group.setVisible(False)
             self.file_group.setVisible(True)
@@ -560,15 +935,26 @@ class MainWindow(QMainWindow):
         if not self.audio_detector:
             self.update_status("错误: 音频检测器未初始化")
             return
+        # 获取当前目标频率
+        current_target_freq = self.target_key.frequency if self.target_key else None
+
+        # 获取当前的录音保存设置
+        save_file_setting = self.settings_save_recording_file # <-- 读取设置状态
+
         # 定义一个包装函数，在音频线程中发射信号
-        def real_time_pitch_callback(result: PitchResult):
-            # 这是一个在 AudioDetector 内部线程中运行的回调
-            self.pitch_signal.pitch_detected.emit(result)
+        # def real_time_pitch_callback(result: PitchResult):
+        #     # 这是一个在 AudioDetector 内部线程中运行的回调
+        #     self.pitch_signal.pitch_detected.emit(result)
+        def real_time_pitch_callback(realtime_data: RealtimeData):
+            self.pitch_signal.pitch_detected.emit(realtime_data) # 传递 RealtimeData
         # 业务逻辑
-        if self.audio_detector.start_realtime_analysis(real_time_pitch_callback, save_recording=True):
+        if self.audio_detector.start_realtime_analysis(pitch_callback=real_time_pitch_callback,
+                                                        save_recording=save_file_setting,
+                                                        target_frequency=current_target_freq):
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             # self.pause_btn.setEnabled(True) # 先禁用暂停
+            self.mode_file.setEnabled(False) # <--- 禁用文件模式按钮
             # 启动计时器
             self.record_start_time = time.time()
             self.record_timer.start(1000) # 每秒更新一次
@@ -577,24 +963,152 @@ class MainWindow(QMainWindow):
             self.update_status("实时分析启动失败")
 
 
+    # 现在已经将实时录音模式的分析改成录音结束后绘制频谱了
+    # def on_stop_recording(self):
+    #     """停止录音"""
+    #     if not self.audio_detector:
+    #         return
+    #     # 保存文件
+    #     recording_file = self.audio_detector.stop_realtime_analysis()
+    #     self.record_timer.stop()
+    #     self.duration_label.setText("⏱ 时长: 00:00")
+    #     # 按钮
+    #     self.start_btn.setEnabled(True)
+    #     self.stop_btn.setEnabled(False)
+    #     self.pause_btn.setEnabled(False)
+    #     # 后处理
+    #     if recording_file:
+    #         self.update_status(f"录音已停止。文件已保存: {os.path.basename(recording_file)}")
+    #     else:
+    #         self.update_status("录音已停止。未保存文件或停止失败")
 
     def on_stop_recording(self):
-        """停止录音"""
+        """停止录音，并触发分析（如果当前是实时模式）"""
         if not self.audio_detector:
             return
-        # 保存文件
+
+        # 0. 禁用所有控制按钮，防止重复点击
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False) # 立即禁用 STOP 按钮
+        self.pause_btn.setEnabled(False)
+
+        # 1. 停止录音线程和流，并获取录音文件路径
         recording_file = self.audio_detector.stop_realtime_analysis()
+
         self.record_timer.stop()
         self.duration_label.setText("⏱ 时长: 00:00")
-        # 按钮
-        self.start_btn.setEnabled(True)
+
+        # self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.pause_btn.setEnabled(False)
-        # 后处理
+
+        # # 2. 如果成功录制了文件，则立即分析
+        # if recording_file:
+        #     self.update_status(f"录音已停止。文件已保存: {os.path.basename(recording_file)}。正在进行分析...")
+
+        #     # 自动进行文件分析（复用 on_analyse_file_clicked 的核心逻辑）
+        #     self._auto_analyse_recording(recording_file)
+
+        # else:
+        #     self.update_status("录音已停止。未保存文件或停止失败")
+        # self.start_btn.setEnabled(True) # 恢复start
+        # # 恢复 RadioButton 状态
+        # self.mode_file.setEnabled(True)
+        # self.mode_realtime.setEnabled(True)
+
+        # 2. 始终执行分析，并记录是否需要删除
         if recording_file:
-            self.update_status(f"录音已停止。文件已保存: {os.path.basename(recording_file)}")
+            self.update_status(f"录音已停止。文件已保存: {os.path.basename(recording_file)}。正在进行分析...")
+
+            # 如果设置是关闭的，将文件添加到待删除列表
+            if not self.settings_save_recording_file:
+                self.temp_files_to_delete.append(recording_file)
+
+            # 自动进行文件分析
+            self._auto_analyse_recording(recording_file)
+
         else:
             self.update_status("录音已停止。未保存文件或停止失败")
+            self.start_btn.setEnabled(True) # 恢复 START 按钮
+            # 恢复 RadioButton 状态
+            self.mode_file.setEnabled(True)
+            self.mode_realtime.setEnabled(True)
+
+    def _clean_up_temp_files(self):
+        """分析完成后，删除临时文件列表中的文件"""
+        files_removed = 0
+        for file_path in self.temp_files_to_delete:
+            try:
+                os.remove(file_path)
+                files_removed += 1
+            except Exception as e:
+                print(f"删除文件失败 {file_path}: {e}")
+
+        if files_removed > 0:
+            self.update_status(f"已清理 {files_removed} 个临时录音文件。")
+
+        self.temp_files_to_delete.clear()
+
+    def _auto_analyse_recording(self, file_path: str):
+        """
+        录音结束后自动执行文件分析和整体绘制。
+        这个方法与 on_analyse_file_clicked 的核心逻辑相同，但输入源是固定的。
+        """
+
+        if not self.audio_detector or not self.piano_generator:
+            self.update_status("错误：音频或钢琴模块未初始化")
+            return
+
+        # --- 进度控制开始 ---
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True) # 显示进度条
+        self.audio_detector.set_progress_callback(self.progress_update_callback) # 设置进度回调
+        # --------------------
+
+        # 确保当前目标频率
+        current_target_freq = self.target_key.frequency if self.target_key else None
+
+        start_time = time.time() # <-- 记录开始时间
+        # 执行同步文件分析
+        analysis_result = self.audio_detector.analyse_audio_file(
+            file_path=file_path,
+            target_frequency=current_target_freq
+        )
+        total_analysis_time = time.time() - start_time # <-- 计算总耗时
+        try:
+            if analysis_result:
+                # 1. 更新状态信息
+                self.update_status(f"分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
+
+                # 2. 更新推杆显示（使用平均偏差）
+                cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
+                if cents_values:
+                    mean_cents = np.mean(cents_values)
+                    self._update_slider_display(mean_cents)
+                else:
+                    self._update_slider_display(0.0)
+
+                # 3. 绘制整体波形图
+                if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
+                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+                else:
+                    self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
+                # --- 调用后保存分析结果的处理逻辑 ---
+                self._handle_post_analysis(analysis_result, file_path, total_analysis_time) # <-- 传递耗时
+                # ----------------------
+            else:
+                self.update_status("自动文件分析失败。")
+        except Exception as e:
+            self.update_status(f"分析过程中发生错误: {e}")
+        finally:
+            # --- 进度控制结束 ---
+            self.audio_detector.set_progress_callback(None) # 清除回调
+            self.progress_bar.setVisible(False) # 隐藏进度条
+            self.progress_bar.setValue(0)
+            # 确保主按钮恢复（已在 on_stop_recording 中处理，但这里再次确认）
+            self.start_btn.setEnabled(True)
+            # 清理文件
+            self._clean_up_temp_files()
 
     def on_pause_recording(self):
         """暂停录音 (暂时简化处理，仅更新状态)"""
@@ -614,11 +1128,15 @@ class MainWindow(QMainWindow):
         #         self.record_timer.start(1000)
         pass # 暂时禁用实际逻辑
 
-    def on_pitch_detected_update_ui(self, result: PitchResult):
+    def on_pitch_detected_update_ui(self, result: RealtimeData):
         """
         接收到实时音高结果，在主线程中安全地更新 UI。
         这是连接音频模块和用户界面的核心。
         """
+        # 修改：从 RealtimeData 中解包 PitchResult 和 audio_frame
+        result = realtime_data.pitch_result
+        audio_frame = realtime_data.audio_frame
+
         # 1. 计算音分偏差
         cents = result.cents_deviation if result.cents_deviation is not None else 0.0
 
@@ -632,7 +1150,13 @@ class MainWindow(QMainWindow):
         # 3. 更新精密推杆显示 (slider_display)
         self._update_slider_display(cents)
 
-        # 4. TODO: 更新频谱波图
+        # 4.  更新频谱波图
+        # audio_frame = realtime_data.audio_frame
+        if hasattr(self, 'spectrum_widget'):
+            # 将实时帧数据传递给 SpectrumWidget 进行绘制
+            # self.spectrum_widget.update_frame(audio_frame)
+            # 传入实时帧数据，标记为实时模式
+            self.spectrum_widget.update_frame(audio_frame, is_full_file=False)
         # 5.更新钢琴键盘高亮
         if self.piano_generator and result.confidence > 0.6: # 仅在高置信度时高亮
             closest_key = self.piano_generator.find_closest_key(result.frequency)
@@ -756,6 +1280,203 @@ class MainWindow(QMainWindow):
 
         new_text = '\n'.join(status_lines[:10])
         self.status_display.setPlainText(new_text)
+
+
+
+    # def _generate_analysis_summary(self,
+    #                                    result: MusicalAnalysisResult,
+    #                                    total_analysis_time: float) -> str: # <-- 增加耗时参数
+    #     """根据分析结果生成摘要文本"""
+    #     if not result:
+    #         return "分析结果为空。"
+
+    #     summary = f"--- 钢琴调律分析报告 ---\n"
+    #     summary += f"分析文件: {os.path.basename(result.file_path)}\n"
+    #     summary += f"文件时长: {result.duration:.2f} 秒\n"
+    #     summary += f"采样率: {result.sample_rate} Hz\n"
+    #     summary += f"分析帧数: {len(result.pitch_results)} 帧\n"
+    #     summary += f"总分析耗时 (s): {total_analysis_time:.3f} 秒\n" # <-- 使用传入的耗时
+    #     summary += f"-----------------------------------\n"
+
+    #     # 主要指标
+    #     summary += f"主要音高分析:\n"
+    #     summary += f"  主导频率 (Hz): {result.dominant_frequency:.2f} Hz\n"
+
+    #     # 获取目标音高信息
+    #     if self.target_key:
+    #         target_note_name = self.target_key.note_name
+    #         target_freq = self.target_key.frequency
+    #         summary += f"  目标音高: {target_note_name} ({target_freq:.2f} Hz)\n"
+
+    #     # 计算平均偏差
+    #     cents_values = [p.cents_deviation for p in result.pitch_results if p.cents_deviation is not None]
+    #     mean_cents = np.mean(cents_values) if cents_values else None
+
+    #     if mean_cents is not None:
+    #         summary += f"  平均偏差 (音分): {mean_cents:.2f} Cents\n"
+    #         summary += f"  调音质量: {result.tuning_quality:.3f}\n"
+    #     else:
+    #         summary += f"调律指标: 无法计算 (目标频率缺失或无有效检测)\n"
+
+    #     summary += f"音高稳定性: {result.stability:.3f}\n"
+
+    #     summary += f"-----------------------------------\n"
+
+    #     # 统计信息
+    #     confidence_values = [p.confidence for p in result.pitch_results]
+
+    #     if cents_values:
+    #         summary += f"统计数据:\n"
+    #         summary += f"  - 最大偏差: {np.max(cents_values):.2f} Cents\n"
+    #         summary += f"  - 最小偏差: {np.min(cents_values):.2f} Cents\n"
+    #         summary += f"  - 标准差: {np.std(cents_values):.2f} Cents\n"
+
+    #     if confidence_values:
+    #         summary += f"  - 平均置信度: {np.mean(confidence_values):.3f}\n"
+
+    #     # 增加算法信息（从 AudioDetector 的打印输出中获取，需要 AnalysisTiming）
+    #     # 假设 AnalysisTiming 被自动计算并存储在 AudioDetector 内部
+
+    #     # 为简化，暂时不包含 AnalysisTiming 的详细信息，但可以在未来版本中添加。
+
+    #     summary += f"-----------------------------------\n"
+    #     summary += f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+    #     return summary
+
+    def _generate_analysis_summary(self,
+                                   result: MusicalAnalysisResult,
+                                   total_analysis_time: float) -> str:
+        """
+        根据分析结果生成摘要文本。
+        这个方法从 MusicalAnalysisResult 中提取数据，并格式化输出。
+        """
+        if not result:
+            return "分析结果为空。"
+
+        # --- 确保 target_key 存在且已设置 ---
+        target_key_info = ""
+        if self.target_key:
+            target_note_name = self.target_key.note_name
+            target_freq = self.target_key.frequency
+            target_key_info = f"  目标音高: {target_note_name} ({target_freq:.2f} Hz)\n"
+
+        # --- 计算统计数据 ---
+        cents_values = [p.cents_deviation for p in result.pitch_results if p.cents_deviation is not None]
+        confidence_values = [p.confidence for p in result.pitch_results]
+        mean_cents = np.mean(cents_values) if cents_values else None
+
+        # --- 开始生成摘要 ---
+        summary = f"--- 钢琴调律分析报告 ---\n"
+        summary += f"分析文件: {os.path.basename(result.file_path)}\n"
+        summary += f"文件时长: {result.duration:.2f} 秒\n"
+        summary += f"采样率: {result.sample_rate} Hz\n"
+        summary += f"分析帧数: {len(result.pitch_results)} 帧\n"
+        summary += f"总分析耗时 (s): {total_analysis_time:.3f} 秒\n"
+        summary += f"-----------------------------------\n"
+
+        # 主要指标
+        summary += f"主要音高分析:\n"
+        summary += f"  主导频率 (Hz): {result.dominant_frequency:.2f} Hz\n"
+        summary += target_key_info
+
+        # 调律指标
+        if mean_cents is not None:
+            summary += f"  平均偏差 (音分): {mean_cents:.2f} Cents\n"
+            summary += f"  调音质量: {result.tuning_quality:.3f}\n"
+        else:
+            summary += f"调律指标: 无法计算 (目标频率缺失或无有效检测)\n"
+
+        summary += f"音高稳定性: {result.stability:.3f}\n"
+
+        summary += f"-----------------------------------\n"
+
+        # 统计信息
+        if cents_values:
+            summary += f"统计数据:\n"
+            summary += f"  - 最大偏差: {np.max(cents_values):.2f} Cents\n"
+            summary += f"  - 最小偏差: {np.min(cents_values):.2f} Cents\n"
+            summary += f"  - 标准差: {np.std(cents_values):.2f} Cents\n"
+
+        if confidence_values:
+            summary += f"  - 平均置信度: {np.mean(confidence_values):.3f}\n"
+
+        summary += f"-----------------------------------\n"
+        summary += f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+        return summary
+
+    def _save_analysis_summary(self, result: MusicalAnalysisResult, default_filename: str, total_analysis_time: float):
+        """弹出文件保存对话框，将分析摘要保存为 TXT 文件"""
+
+        # 调用摘要生成器
+        summary_text = self._generate_analysis_summary(result, total_analysis_time)
+
+        # 默认保存路径
+        default_folder = self.current_analysis_folder if hasattr(self, 'current_analysis_folder') else os.getcwd()
+        default_path = os.path.join(default_folder, default_filename)
+
+        # 弹出保存对话框
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存分析结果摘要",
+            default_path,
+            "文本文件 (*.txt);;所有文件 (*)"
+        )
+
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(summary_text)
+                self.update_status(f"分析摘要已成功保存到: {os.path.basename(file_path)}")
+            except Exception as e:
+                self.update_status(f"保存文件失败: {e}")
+                QMessageBox.critical(self, "保存错误", f"保存分析结果摘要失败:\n{e}")
+
+    # def _handle_post_analysis(self, analysis_result: MusicalAnalysisResult, file_path: str, total_analysis_time: float):
+    #     """处理分析完成后续逻辑：提示保存摘要"""
+
+    #     if not analysis_result:
+    #         return
+
+    #     if self.settings_auto_prompt_save:
+    #         # 默认文件名: 原始文件名_Analysis_YYYYMMDD_HHMMSS.txt
+    #         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #         original_name = os.path.splitext(os.path.basename(file_path))[0]
+    #         default_filename = f"{original_name}_Analysis_{timestamp}.txt"
+
+    #         # 询问用户是否保存
+    #         reply = QMessageBox.question(
+    #             self,
+    #             "保存分析结果",
+    #             f"文件分析已完成。\n是否保存分析摘要？",
+    #             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+    #             QMessageBox.StandardButton.Yes
+    #         )
+
+    #         if reply == QMessageBox.StandardButton.Yes:
+    #             self._save_analysis_summary(analysis_result, default_filename, total_analysis_time)
+
+    def _handle_post_analysis(self, analysis_result: MusicalAnalysisResult, file_path: str, total_analysis_time: float):
+        """处理分析完成后续逻辑：根据设置，弹出保存对话框让用户指定路径"""
+
+        if not analysis_result:
+            return
+
+        # 1. 检查设置：用户是否允许/需要保存提示
+        if self.settings_auto_prompt_save:
+            # 默认文件名: 原始文件名_Analysis_YYYYMMDD_HHMMSS.txt
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            original_name = os.path.splitext(os.path.basename(file_path))[0]
+            default_filename = f"{original_name}_Analysis_{timestamp}.txt"
+
+            self.update_status("分析完成。等待用户指定保存路径...")
+
+            # 2. 调用 _save_analysis_summary，该方法内部会弹出 QFileDialog
+            #    并等待用户手动选择保存路径。
+            self._save_analysis_summary(analysis_result, default_filename, total_analysis_time)
+        else:
+            self.update_status("分析完成。用户设置：不自动弹出保存提示。")
 
 # ======================钢琴系统===================
     def init_piano_system(self):

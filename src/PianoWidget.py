@@ -126,8 +126,14 @@ class PianoWidget(QWidget):
                 painter.fillRect(rect, color)
                 painter.drawRect(rect)
 
-                # 绘制音名 C/F/A
-                if key_data.note_name.startswith('C') or key_data.note_name.startswith('F') or key_data.note_name.startswith('A'):
+                # # 绘制音名 C/F/A
+                # if key_data.note_name.startswith('C') or key_data.note_name.startswith('F') or key_data.note_name.startswith('A'):
+                #     painter.setPen(QColor(50, 50, 50))
+                #     # 绘制在底部
+                #     painter.drawText(rect.adjusted(0, rect.height() - 20, 0, 0),
+                #                      Qt.AlignCenter, key_data.note_name)
+                # 绘制音名 C
+                if key_data.note_name.startswith('C'):
                     painter.setPen(QColor(50, 50, 50))
                     # 绘制在底部
                     painter.drawText(rect.adjusted(0, rect.height() - 20, 0, 0),
