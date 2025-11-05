@@ -5,11 +5,11 @@
         "main.py",
         "res.qrc",
         "src/AudioDetector.py",
-        "src/C0Callibrator.py",
         "src/InteractionManager.py",
         "src/MechanicsEngine.py",
         "src/PianoDebugger.py",
         "src/PianoGenerator.py",
+        "src/PianoWidget.py",
         "src/PitchDetector.py"
     ]
 }

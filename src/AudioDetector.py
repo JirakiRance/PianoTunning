@@ -5,6 +5,7 @@ import sounddevice as sd
 import wave
 import time
 import os
+import numpy as np
 import threading
 from queue import Queue
 from datetime import datetime
@@ -14,6 +15,12 @@ from dataclasses import dataclass
 
 from PitchDetector import PitchDetector, PitchDetectionResult,DetectionTiming
 
+
+# @dataclass
+# class RealtimeData:
+#     """实时传输的数据包"""
+#     pitch_result: PitchResult
+#     audio_frame: np.ndarray # 当前音频帧数据 (用于波形和频谱)
 
 class ProcessingMode(Enum):
     """处理模式枚举"""

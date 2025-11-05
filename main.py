@@ -33,5 +33,6 @@ if __name__ == "__main__":
     app.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
     app.setApplicationVersion("1.0.0")
     window = MainWindow()
+    window.resize(1400,700)
     window.show()
     sys.exit(app.exec())
