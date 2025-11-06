@@ -38,7 +38,7 @@ class PianoGenerator:
     """88键钢琴生成器类"""
 
     def __init__(self, base_frequency: float = 440.0,
-                 accidental_type: AccidentalType = AccidentalType.SHARP,
+                 accidental_type: AccidentalType = AccidentalType.FLAT,
                  key_width: float = 20.0,
                  key_height_white: float = 120.0,
                  key_height_black: float = 80.0):

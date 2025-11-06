@@ -1,7 +1,8 @@
 # This Python file uses the following encoding: utf-8
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow,QFileDialog,QListWidget,QListWidgetItem
+from PySide6.QtWidgets import QApplication, QMainWindow,QFileDialog,QListWidget,QListWidgetItem,QInputDialog,QMessageBox,QDialog
+
 
 # Important:
 # You need to run the following command to generate the ui_form.py file
@@ -23,15 +24,18 @@ from PySide6.QtCore import QFile,QStandardPaths,QDir
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import  QPushButton, QLabel,QFileDialog,QLineEdit,QProgressBar
 from PySide6.QtWidgets import QSizePolicy,QComboBox
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction,QActionGroup
 import numpy as np
 from datetime import datetime
+from typing import Dict,Any
 
 # 导入音频检测模块
 try:
     from AudioDetector import AudioDetector, PitchDetectionAlgorithm,PitchResult,RealtimeData,AnalysisProgress,MusicalAnalysisResult
     AUDIO_MODULES_AVAILABLE = True
 except ImportError as e:
+    import traceback
+    traceback.print_exc()
     print(f"导入音频模块失败: {e}")
     AUDIO_MODULES_AVAILABLE = False
 
@@ -56,6 +60,25 @@ try:
     from PianoWidget import PianoWidget
 except ImportError as e:
     print(f"导入 PianoWidget 失败: {e}")
+
+
+# 导入 StringCSVManager
+try:
+    import csv
+    from StringCSVManager import StringCSVManager
+except ImportError as e:
+    print(f"导入 StringCSVManager 失败: {e}")
+    StringCSVManager = None
+
+# 导入钢琴配置 Widget
+try:
+    from PianoConfigWidget import PianoConfigWidget
+    PIANO_CONFIG_WIDGET_AVAILABLE = True
+except ImportError as e:
+    print(f"导入 PianoConfigWidget 失败: {e}")
+    import traceback
+    traceback.print_exc()
+    PIANO_CONFIG_WIDGET_AVAILABLE = False
 
 import sys
 import os
@@ -111,6 +134,21 @@ class MainWindow(QMainWindow):
         # 0. UI 基础设置
         super().__init__()
 
+        # 0.5 参数配置
+        # --- 力学参数声明与默认值 ---
+        self.mech_I = 0.0001           # 转动惯量 I (kg·m²)
+        self.mech_r = 0.005            # 弦轴半径 r (m)
+        self.mech_Kd = 0.5             # 施力敏感度 K_D (N·m·s/rad)
+        self.mech_k = 500000.0         # 琴弦劲度系数 k (N/m) (用于张力/角度转换)
+
+        # 摩擦模型参数 (简化为限幅摩擦模型，引用报告中的符号)
+        self.mech_friction_model = "Limit_Friction" # 默认模型
+        self.mech_fric_limit_0 = 0.1   # 初始静摩擦极限 τ_fric_limit_0 (N·m)
+        self.mech_alpha = 0.05         # 静摩擦增长系数 α (N·m/rad)
+        self.mech_kinetic = 0.08       # 动摩擦扭矩 τ_kinetic (N·m)
+        self.mech_sigma = 0.001        # 粘性摩擦系数 σ (N·m·s/rad)
+        # ------------------------------------
+
         # 1.控件
         # 用于缓存状态消息的静态列表
         self._status_message_cache = []
@@ -120,6 +158,18 @@ class MainWindow(QMainWindow):
         self.settings_auto_prompt_save = True
         # 默认开启保存录音文件
         self.settings_save_recording_file = True
+        # 录音时长设置声明
+        self.max_recording_time_options = [5, 10, 20] # 选项：5s, 10s, 20s
+        self.settings_max_recording_time = 10         # 默认值 10s
+        # 音名系统设置声明,默认使用降号b系统
+        self.settings_accidental_type = AccidentalType.FLAT
+        # --- 初始化数据库管理器 ---
+        self.csv_manager = None
+        if StringCSVManager:
+            self.csv_manager = StringCSVManager()
+            print(f"CSV 管理器已初始化，文件路径: {self.csv_manager.get_connected_path()}")
+        # ---------------------------
+
 
         # 2. 声明数据模型和核心模块实例 (在 setup_ui 调用前完成)
         self.audio_detector = None     # 存储 AudioDetector 实例
@@ -149,16 +199,22 @@ class MainWindow(QMainWindow):
         # 6. 最终状态初始化 (在这里统一刷新状态，取代之前分散的 update_status 调用)
         self._post_ui_init_status_update()
 
+    # 处理参数文件路径更新
+    def _handle_db_config_update(self, new_file_path: str):
+        """接收 PianoConfigWidget 发出的文件路径更改信号"""
+        # CSV Manager 实例本身没有变，只是内部的 file_path 变了，这里更新状态即可。
+        self.update_status(f"琴弦数据文件已更新为: {new_file_path}")
+        # 这里不需要重新加载 self.csv_manager，因为它已是引用。
 
 
     def _post_ui_init_status_update(self):
         """在UI创建完成后，统一初始化状态显示"""
-        # 初始化状态显示 - 钢琴系统
-        if self.target_key:
-            self.set_target_note(self.target_key.note_name)
-            self.update_status(f"参数预览 - 目标频率: {self.target_key.note_name} ({self.target_key.frequency:.1f}Hz)")
-        else:
-            self.update_status("目标音高: 待配置 (钢琴系统初始化失败)")
+        # # 初始化状态显示 - 钢琴系统
+        # if self.target_key:
+        #     self.set_target_note(self.target_key.note_name)
+        #     self.update_status(f"参数预览 - 目标频率: {self.target_key.note_name} ({self.target_key.frequency:.1f}Hz)")
+        # else:
+        #     self.update_status("目标音高: 待配置 (钢琴系统初始化失败)")
 
         # 初始化状态显示 - 音频系统 (重播 init_audio_system 中的状态信息)
         if self.audio_detector:
@@ -171,6 +227,16 @@ class MainWindow(QMainWindow):
             self.update_status(f"钢琴系统初始化成功，88键，A4={self.piano_generator.base_frequency}Hz")
         else:
             self.update_status("钢琴模块不可用或初始化失败")
+
+        # 初始化状态显示 - 钢琴系统
+        if self.target_key:
+            self.set_target_note(self.target_key.note_name)
+            self.update_status(f"参数预览 - 目标频率: {self.target_key.note_name} ({self.target_key.frequency:.1f}Hz)")
+        else:
+            self.update_status("目标音高: 待配置 (钢琴系统初始化失败)")
+        # # --- 修正：强制刷新 UI 状态 ---
+        QApplication.processEvents() # 强制处理所有挂起的重绘事件
+        # # ------------------------------------
 
 
     # 初始化音频系统
@@ -559,26 +625,45 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("🚪 退出")
 
-        # 编辑菜单
-        edit_menu = menubar.addMenu("✏️ 编辑(&E)")
-        edit_menu.addAction("⭐ 参数预设")
-        edit_menu.addAction("📋 复制数据")
-        edit_menu.addAction("🧹 清空记录")
+        # # 编辑菜单
+        # edit_menu = menubar.addMenu("✏️ 编辑(&E)")
+        # edit_menu.addAction("⭐ 参数预设")
+        # edit_menu.addAction("📋 复制数据")
+        # edit_menu.addAction("🧹 清空记录")
 
-        # 视图菜单
-        view_menu = menubar.addMenu("👁️ 视图(&V)")
-        view_menu.addAction("📈 频谱显示选项")
-        view_menu.addAction("🎹 钢琴窗主题")
-        view_menu.addAction("🎨 界面主题")
-        view_menu.addSeparator()
-        view_menu.addAction("🖥️ 全屏模式")
+        # # 视图菜单
+        # view_menu = menubar.addMenu("👁️ 视图(&V)")
+        # view_menu.addAction("📈 频谱显示选项")
+        # view_menu.addAction("🎹 钢琴窗主题")
+        # view_menu.addAction("🎨 界面主题")
+        # view_menu.addSeparator()
+        # view_menu.addAction("🖥️ 全屏模式")
 
-        # 工具菜单
-        tools_menu = menubar.addMenu("🛠️ 工具(&T)")
-        tools_menu.addAction("🎧 音频设备配置")
-        tools_menu.addAction("🔊 参考音生成器")
-        tools_menu.addAction("⚖️ 频率校准工具")
-        tools_menu.addAction("📁 批量文件分析")
+        # # 工具菜单
+        # tools_menu = menubar.addMenu("🛠️ 工具(&T)")
+        # tools_menu.addAction("🎧 音频设备配置")
+        # tools_menu.addAction("🔊 参考音生成器")
+        # tools_menu.addAction("⚖️ 频率校准工具")
+        # tools_menu.addAction("📁 批量文件分析")
+
+        # --- 新增：参数菜单 ---
+        params_menu = menubar.addMenu("⚙️ 参数(&P)")
+
+        # 1. 钢琴参数配置
+        self.action_piano_config = QAction("🎹 钢琴物理参数配置", self)
+        self.action_piano_config.triggered.connect(self._open_piano_config_dialog)
+        params_menu.addAction(self.action_piano_config)
+
+        # 2. 摩擦模型配置
+        self.action_friction_config = QAction("⚖️ 摩擦模型配置", self)
+        self.action_friction_config.triggered.connect(self._open_friction_config_dialog)
+        params_menu.addAction(self.action_friction_config)
+
+        # 3. 施力敏感度 (K_D)
+        self.action_kd_config = QAction("💪 施力敏感度 (K_D) 设置", self)
+        self.action_kd_config.triggered.connect(self._open_kd_config_dialog)
+        params_menu.addAction(self.action_kd_config)
+        # ------------------------
 
         # 设置菜单
         settings_menu = menubar.addMenu("⚙️ 设置(&S)")
@@ -593,6 +678,58 @@ class MainWindow(QMainWindow):
         self.action_toggle_save_recording.setCheckable(True)
         self.action_toggle_save_recording.setChecked(self.settings_save_recording_file)
         self.action_toggle_save_recording.triggered.connect(self._toggle_save_recording_setting)
+
+        # --- 最大录音时长子菜单 ---
+        max_time_menu = settings_menu.addMenu("最大录音时长")
+        # QActionGroup 确保只有一个选项被选中
+        self.max_time_action_group = QActionGroup(self)
+        self.max_time_action_group.setExclusive(True)
+
+        for time_s in self.max_recording_time_options:
+            action = QAction(f"{time_s} 秒", self, checkable=True)
+            action.setData(time_s) # 将秒数存储在 QAction 的 Data 属性中
+
+            if time_s == self.settings_max_recording_time:
+                action.setChecked(True)
+
+            self.max_time_action_group.addAction(action)
+            max_time_menu.addAction(action)
+
+        # 连接 QActionGroup 的 triggered 信号来处理选择变化
+        self.max_time_action_group.triggered.connect(self._set_max_recording_time)
+        # ----------------------------------------------------
+
+        # --- 音名系统设置子菜单 ---
+        accidental_menu = settings_menu.addMenu("音名系统设置")
+        # QActionGroup 确保只有一个选项被选中
+        self.accidental_action_group = QActionGroup(self)
+        self.accidental_action_group.setExclusive(True)
+
+        # 1. 升号选项
+        self.action_sharp = QAction("升号 (#) 系统", self, checkable=True)
+        self.action_sharp.setData(AccidentalType.SHARP)
+        if self.settings_accidental_type == AccidentalType.SHARP:
+            self.action_sharp.setChecked(True)
+
+        # 2. 降号选项
+        self.action_flat = QAction("降号 (b) 系统", self, checkable=True)
+        self.action_flat.setData(AccidentalType.FLAT)
+        if self.settings_accidental_type == AccidentalType.FLAT:
+            self.action_flat.setChecked(True)
+
+        # 添加到组和菜单
+        self.accidental_action_group.addAction(self.action_sharp)
+        self.accidental_action_group.addAction(self.action_flat)
+        accidental_menu.addAction(self.action_sharp)
+        accidental_menu.addAction(self.action_flat)
+
+        # 连接 triggered 信号
+        self.accidental_action_group.triggered.connect(self._set_accidental_type)
+        # ----------------------------------------------------
+
+
+        # 添加分隔线，区分不同类别的设置.其上为选择项，其下为直接设置项
+        settings_menu.addSeparator()
 
         # 加入设置
         settings_menu.addAction(self.action_toggle_save_recording)
@@ -612,6 +749,164 @@ class MainWindow(QMainWindow):
         help_menu.addAction("⌨️ 快捷键列表")
         help_menu.addSeparator()
         help_menu.addAction("ℹ️ 关于")
+
+
+
+    def _open_piano_config_dialog(self):
+        """打开钢琴物理参数配置对话框"""
+        if not PIANO_CONFIG_WIDGET_AVAILABLE:
+            QMessageBox.critical(self, "错误", "钢琴配置模块未找到。")
+            return
+
+        # 收集当前参数
+        current_params = {
+            'mech_I': self.mech_I,
+            'mech_r': self.mech_r,
+            'mech_k': self.mech_k,
+        }
+
+        # 使用 QDialog 来承载 PianoConfigWidget
+        dialog = QDialog(self)
+        config_widget = PianoConfigWidget(current_params,self.csv_manager, dialog)
+
+        # 连接信号：当 widget 发出保存信号时，执行更新逻辑
+        config_widget.config_saved.connect(self._update_piano_physics_params)
+        # 连接信号: 参数文件路径更改信号
+        config_widget.config_saved.connect(self._update_piano_physics_params)
+        config_widget.db_config_updated.connect(self._handle_db_config_update)
+
+        dialog.setLayout(QVBoxLayout(dialog))
+        dialog.layout().addWidget(config_widget)
+        dialog.setWindowTitle(config_widget.windowTitle())
+        dialog.setModal(True) # 设置为模态对话框
+
+        # --- 拦截 QDialog 的关闭事件 ---
+        def handle_dialog_close(allowed: bool):
+            """处理来自 PianoConfigWidget 的关闭请求信号"""
+            if allowed:
+                dialog.close() # 允许关闭对话框
+            # 否则不执行任何操作，对话框保持打开
+
+        config_widget.request_close.connect(handle_dialog_close)
+
+        # 拦截 QDialog 自身的关闭按钮 (X 按钮)
+        def dialog_close_handler(event):
+            """拦截对话框的 X 按钮点击"""
+            event.ignore() # 默认阻止关闭
+            config_widget.request_close_action() # 触发 Widget 的校验逻辑
+
+        dialog.closeEvent = dialog_close_handler
+
+        # 3. 让按钮连接到父级对话框的关闭请求
+        config_widget.btn_cancel.clicked.disconnect() # 断开旧连接
+        config_widget.btn_cancel.clicked.connect(config_widget.request_close_action) # 取消按钮也触发校验
+
+        dialog.exec()
+
+    def _update_piano_physics_params(self, new_params: Dict[str, Any]):
+        """接收 PianoConfigWidget 发出的信号，更新内部物理参数"""
+        try:
+            self.mech_I = new_params['mech_I']
+            self.mech_r = new_params['mech_r']
+            self.mech_k = new_params['mech_k']
+
+            self.update_status("钢琴核心物理参数已更新。")
+
+            # TODO: 未来需要通知 MechanicalEngine 模块更新这些参数
+            # if self.mechanical_engine:
+            #     self.mechanical_engine.update_parameters(new_params)
+        except Exception as e:
+            self.update_status(f"更新参数失败: {e}")
+            QMessageBox.critical(self, "更新错误", f"更新钢琴参数失败:\n{e}")
+
+    def _open_friction_config_dialog(self):
+        """打开摩擦模型配置对话框（包括模型选择和参数）"""
+        # --- 核心逻辑说明 ---
+        # 这个对话框需要一个 QComboBox 来选择模型 (目前只有 Limit_Friction)
+        # 还需要输入框来配置 τ_fric_limit_0, α, τ_kinetic, σ。
+        # ---
+        self.update_status("等待实现：打开摩擦模型配置对话框。")
+        msg = (f"当前模型: {self.mech_friction_model}\n"
+               f"初始静摩擦 τ_fric_limit_0: {self.mech_fric_limit_0} N·m\n"
+               f"摩擦增长系数 α: {self.mech_alpha}\n"
+               f"动摩擦扭矩 τ_kinetic: {self.mech_kinetic} N·m\n"
+               f"粘性摩擦系数 σ: {self.mech_sigma}")
+        QMessageBox.information(self, "摩擦模型配置", msg)
+
+
+    def _open_kd_config_dialog(self):
+        """打开施力敏感度 K_D 配置对话框"""
+        # --- 核心逻辑说明 ---
+        # 这是一个简单的配置，可以使用 QInputDialog 或小型对话框
+        # ---
+        self.update_status("等待实现：打开施力敏感度 (K_D) 设置对话框。")
+        current_Kd = self.mech_Kd
+        new_Kd, ok = QInputDialog.getDouble(
+            self,
+            "施力敏感度 (K_D) 设置",
+            "设置虚拟力敏感度 K_D (建议 0.1 - 2.0):",
+            current_Kd,
+            decimals=3
+            # decimals=3,
+            # min=-10.0,
+            # max=10.0
+        )
+        if ok:
+            self.mech_Kd = new_Kd
+            self.update_status(f"施力敏感度 K_D 已更新为: {new_Kd}")
+
+
+        # def _set_accidental_type(self, action: QAction):
+    #     """处理音名系统（升降号）的选择"""
+    #     new_type = action.data()
+    #     if new_type != self.settings_accidental_type:
+    #         self.settings_accidental_type = new_type
+    #         # 重新初始化钢琴系统以应用新的音名命名规则
+    #         self.init_piano_system()
+    #         # 更新状态栏
+    #         type_str = "升号 (#)" if new_type == AccidentalType.SHARP else "降号 (b)"
+    #         self.update_status(f"音名系统已切换到 {type_str}。")
+    #         if hasattr(self, 'piano_window'):
+    #              self.piano_window.update_note_labels(self.piano_generator)
+
+    def _set_accidental_type(self, action: QAction):
+        """处理音名系统（升降号）的选择，并刷新UI"""
+        new_type = action.data()
+        if new_type != self.settings_accidental_type:
+            self.settings_accidental_type = new_type
+            # 1. 重新初始化钢琴系统以应用新的音名命名规则
+            self.init_piano_system()
+            # 2. 刷新 UI 组件
+            if self.piano_generator:
+                # --- A. 刷新 QComboBox (音名选择框) ---
+                if hasattr(self, 'note_selector'):
+                    self.note_selector.blockSignals(True) # 阻止信号，避免在填充时触发不必要的 set_target_note
+                    self.note_selector.clear()
+                    # 重新获取并填充所有 88 个键的音名
+                    note_names = sorted(self.piano_generator.export_key_frequencies().keys(),
+                                        key=lambda n: self.piano_generator.get_key_by_note_name(n).midi_number)
+                    self.note_selector.addItems(note_names)
+                    # 重新选择当前调律目标（例如，如果目标是 A4，保持选中 A4）
+                    if self.target_key:
+                        self.note_selector.setCurrentText(self.target_key.note_name)
+                        self.set_target_note(self.target_key.note_name)
+                    # self.note_selector.setCurrentText(self.default_target_note_name)
+                    self.note_selector.blockSignals(False) # 恢复信号
+                # --- B. 刷新 PianoWidget (钢琴窗) ---
+                if hasattr(self, 'piano_widget'):
+                    # 强制 PianoWidget 重新绘制整个键盘
+                    self.piano_widget.update()
+            # 3. 更新状态栏
+            type_str = "升号 (#)" if new_type == AccidentalType.SHARP else "降号 (b)"
+            self.update_status(f"音名系统已切换到 {type_str}。")
+
+
+    # 处理最大录音时长选择的方法
+    def _set_max_recording_time(self, action: QAction):
+        """处理用户在菜单中选择的最大录音时长"""
+        selected_time = action.data()
+        self.settings_max_recording_time = selected_time
+        self.update_status(f"最大录音时长已设置为 {selected_time} 秒。")
 
     def _toggle_save_prompt_setting(self):
             """切换分析完成后是否弹出保存对话框的设置"""
@@ -1029,9 +1324,11 @@ class MainWindow(QMainWindow):
 
         else:
             self.update_status("录音已停止。未保存文件或停止失败")
-            self.start_btn.setEnabled(True) # 恢复 START 按钮
-            # 恢复 RadioButton 状态
+        self.start_btn.setEnabled(True) # 恢复 START 按钮
+        # 恢复 RadioButton 状态
+        if hasattr(self, 'mode_file'):
             self.mode_file.setEnabled(True)
+        if hasattr(self, 'mode_realtime'):
             self.mode_realtime.setEnabled(True)
 
     def _clean_up_temp_files(self):
@@ -1212,6 +1509,13 @@ class MainWindow(QMainWindow):
         """更新录音时长显示"""
         if self.record_start_time > 0 and self.audio_detector and self.audio_detector.is_recording:
             elapsed_time = int(time.time() - self.record_start_time)
+            # --- 新增功能：达到最大录音时长时自动停止 ---
+            if elapsed_time >= self.settings_max_recording_time:
+                self.record_timer.stop()
+                self.update_status(f"达到最大时长 ({self.settings_max_recording_time} 秒)，自动停止录音。")
+                self.on_stop_recording() # 自动触发停止逻辑
+                return
+            # ----------------------------------------------
             minutes = elapsed_time // 60
             seconds = elapsed_time % 60
             self.duration_label.setText(f"⏱ 时长: {minutes:02d}:{seconds:02d}")
@@ -1505,11 +1809,15 @@ class MainWindow(QMainWindow):
                 # 1. 初始化 PianoGenerator
                 self.piano_generator = PianoGenerator(
                     base_frequency=440.0,
-                    accidental_type=AccidentalType.FLAT
+                    accidental_type=self.settings_accidental_type
                 )
 
-                # 2. 设置目标键参数 (只设置数据，不操作 UI)
+                # # 2. 设置目标键参数 (只设置数据，不操作 UI)
                 self.target_key = self.piano_generator.get_key_by_note_name(self.default_target_note_name)
+                # 2. 修正：将新的生成器实例传递给 PianoWidget
+                # 假设 self.piano_widget 已经创建且有一个 set_piano_generator 方法
+                if hasattr(self, 'piano_widget') and hasattr(self.piano_widget, 'set_piano_generator'):
+                     self.piano_widget.set_piano_generator(self.piano_generator)
 
                 # 3. 状态更新 (使用缓存安全的 update_status)
                 self.update_status(f"钢琴系统初始化成功，88键，A4={self.piano_generator.base_frequency}Hz")

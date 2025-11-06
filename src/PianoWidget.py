@@ -44,6 +44,26 @@ class PianoWidget(QWidget):
         self._calculate_key_dimensions()
         super().resizeEvent(event)
 
+    def set_piano_generator(self, new_generator):
+        """
+        接收新的 PianoGenerator 实例并更新内部状态。
+        这是解决 UI 引用滞后问题的关键。
+        """
+        self.piano_generator = new_generator
+        # 1. 重新计算所有键的绘制区域 (因为新的生成器可能有不同的音名)
+        self._calculate_key_dimensions()
+        # 2. 清除旧的高亮状态
+        self.clear_highlights()
+        # 3. 强制重绘
+        self.update()
+
+
+    def clear_highlights(self):
+        """清除所有高亮状态"""
+        self.target_note_name = None
+        self.detected_note_name = None
+        self.update()
+
     def _calculate_key_dimensions(self):
         """根据当前组件尺寸计算键的实际绘制尺寸"""
         if not self.piano_generator:
