@@ -7,47 +7,48 @@ import numpy as np
 DATA_DIR = 'data'
 DEFAULT_FILE_NAME = 'strings_default.csv'
 
+from ConfigManager import ConfigManager
 
+# 现在这个功能移交给ConfigManager
+# # --- 完整的 88 键静态默认数据 ---
+# def _generate_full_static_data():
+#     """生成完整的 88 键 L 和 μ 静态数据"""
+#     data = []
 
-# --- 完整的 88 键静态默认数据 ---
-def _generate_full_static_data():
-    """生成完整的 88 键 L 和 μ 静态数据"""
-    data = []
+#     # MIDI 编号范围：A0 (21) 到 C8 (108)
+#     start_midi = 21
+#     end_midi = 108
 
-    # MIDI 编号范围：A0 (21) 到 C8 (108)
-    start_midi = 21
-    end_midi = 108
+#     # 模拟长度和密度梯度 (使用对数或线性平滑模拟真实钢琴的渐变)
+#     # 长度从 1.5m 线性递减到 0.008m
+#     lengths = np.linspace(1.5, 0.008, end_midi - start_midi + 1)
+#     # 密度从 0.015 kg/m 模拟对数递减到 0.000004 kg/m
+#     densities = np.logspace(np.log10(0.015), np.log10(0.000004), end_midi - start_midi + 1)
 
-    # 模拟长度和密度梯度 (使用对数或线性平滑模拟真实钢琴的渐变)
-    # 长度从 1.5m 线性递减到 0.008m
-    lengths = np.linspace(1.5, 0.008, end_midi - start_midi + 1)
-    # 密度从 0.015 kg/m 模拟对数递减到 0.000004 kg/m
-    densities = np.logspace(np.log10(0.015), np.log10(0.000004), end_midi - start_midi + 1)
+#     # 标准升号音名表 (从 A0 开始)
+#     note_names_sharp = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
 
-    # 标准升号音名表 (从 A0 开始)
-    note_names_sharp = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
+#     for i, midi in enumerate(range(start_midi, end_midi + 1)):
+#         key_id = midi - start_midi
+#         octave = (midi // 12) - 1 # 得到八度数
+#         if midi == 21: octave = 0 # 修正 A0 的八度
+#         if midi == 22: octave = 0 # 修正 A#0 的八度
+#         if midi == 23: octave = 0 # 修正 B0 的八度
+#         if midi == 108: octave = 8 # 修正 C8 的八度
 
-    for i, midi in enumerate(range(start_midi, end_midi + 1)):
-        key_id = midi - start_midi
-        octave = (midi // 12) - 1 # 得到八度数
-        if midi == 21: octave = 0 # 修正 A0 的八度
-        if midi == 22: octave = 0 # 修正 A#0 的八度
-        if midi == 23: octave = 0 # 修正 B0 的八度
-        if midi == 108: octave = 8 # 修正 C8 的八度
+#         note_base = note_names_sharp[(midi - 21) % 12]
+#         note_name = f"{note_base}{octave}"
 
-        note_base = note_names_sharp[(midi - 21) % 12]
-        note_name = f"{note_base}{octave}"
+#         data.append({
+#             'key_id': key_id,
+#             'note_name': note_name.replace('A#00', 'A#0').replace('A00', 'A0').replace('B00', 'B0'), # 修正 A0/A#0/B0 的八度显示
+#             'length': float(f"{lengths[i]:.4f}"),
+#             'density': float(f"{densities[i]:.8f}")
+#         })
 
-        data.append({
-            'key_id': key_id,
-            'note_name': note_name.replace('A#00', 'A#0').replace('A00', 'A0').replace('B00', 'B0'), # 修正 A0/A#0/B0 的八度显示
-            'length': float(f"{lengths[i]:.4f}"),
-            'density': float(f"{densities[i]:.8f}")
-        })
+#     return data
 
-    return data
-
-STATIC_DEFAULT_STRING_DATA = _generate_full_static_data()
+# STATIC_DEFAULT_STRING_DATA = _generate_full_static_data()
 # ----------------------------------------------------
 
 
@@ -100,7 +101,8 @@ class StringCSVManager:
                     writer.writeheader()
 
                     # 2. 写入默认数据
-                    writer.writerows(STATIC_DEFAULT_STRING_DATA)
+                    # writer.writerows(STATIC_DEFAULT_STRING_DATA)
+                    writer.writerows(ConfigManager.STATIC_DEFAULT_STRING_DATA)
 
                 print(f"初始化 CSV 文件成功: {self.file_path}")
 
@@ -125,6 +127,23 @@ class StringCSVManager:
         except Exception as e:
             print(f"读取 CSV 文件失败: {e}")
         return data
+
+    def get_string_parameters_by_id(self, key_id: int) -> Optional[Dict[str, Any]]:
+        """
+        从 CSV 文件中加载所有琴弦参数，并按 key_id 查找单个琴弦的数据。
+
+        :param key_id: 钢琴键的 ID (0 到 87)
+        :return: 包含 length 和 density 的字典，如果未找到则返回 None。
+        """
+        # 1. 从 CSV 文件加载所有数据
+        all_params = self.get_string_parameters()
+
+        # 2. 遍历查找匹配的 key_id
+        for param in all_params:
+            if param.get('key_id') == key_id:
+                return param
+
+        return None
 
     def update_string_parameters(self, params: List[Dict[str, Any]]) -> bool:
         """将所有琴弦参数写入 CSV 文件 (覆盖模式)"""
