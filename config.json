@@ -1,7 +1,7 @@
 {
-    "mech_I": 0.0,
-    "mech_r": 0.003,
-    "mech_k": 400000.0,
+    "mech_I": 0.002,
+    "mech_r": 0.0234,
+    "mech_k": 3000000.0,
     "mech_Kd": 0.5,
     "mech_friction_model": "Limit_Friction",
     "mech_fric_limit_0": 0.35,

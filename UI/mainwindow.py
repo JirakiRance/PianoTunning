@@ -68,13 +68,24 @@ except ImportError as e:
 # except ImportError as e:
 #     print(f"导入 TuningDialWidget 失败: {e}")
 #     TUNING_DIAL_AVAILABLE = False
-try:
-    from TuningInputWidget import TuningInputWidget
-    TUNING_INPUT_WIDGHET_AVAILABLE = True
-except ImportError as e:
-    print(f"导入 TuningInputWidget 失败: {e}")
-    TUNING_INPUT_WIDGHET_AVAILABLE = False
+# try:
+#     from TuningInputWidget import TuningInputWidget
+#     TUNING_INPUT_WIDGHET_AVAILABLE = True
+# except ImportError as e:
+#     print(f"导入 TuningInputWidget 失败: {e}")
+#     TUNING_INPUT_WIDGHET_AVAILABLE = False
 
+# 导入RightMechanicsPanel
+try:
+    from RightMechanicsPanel import RightMechanicsPanel
+    RIGHT_PANEL_AVAILABLE = True
+except ImportError as e:
+    import traceback
+    traceback.print_exc()
+    print(f"导入 RightMechanicsPanel 失败: {e}")
+    RIGHT_PANEL_AVAILABLE = False
+
+from MechanicsEngine import MechanicsEngine
 
 # 导入配置管理器和数据管理器
 try:
@@ -132,6 +143,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         # 0. UI 基础设置
         super().__init__()
+        self.right_panel=None
 
         # 0.5 参数配置
         self.config_manager = ConfigManager(project_root)
@@ -177,15 +189,15 @@ class MainWindow(QMainWindow):
         # 音名系统设置声明,默认使用降号b系统
         self.settings_accidental_type = AccidentalType.FLAT
 
-        # 1.5 --- RK4 驱动状态和计时器 (必须在 connect_signals 前实例化) ---
-        self.user_input_ddt = 0.0
-        self.user_input_torque = 0.0
-        self.is_simulating = False
-        self.last_analysis_freq = None
+        # # 1.5 --- RK4 驱动状态和计时器 (必须在 connect_signals 前实例化) ---
+        # self.user_input_ddt = 0.0
+        # self.user_input_torque = 0.0
+        # self.is_simulating = False
+        # self.last_analysis_freq = None
 
-        self.tuning_loop_timer = QTimer(self) # <-- QTimer 实例化
-        self.tuning_loop_timer.timeout.connect(self._run_tuning_simulation)
-        self.tuning_loop_timer.setInterval(int(1000 / 60))
+        # self.tuning_loop_timer = QTimer(self) # <-- QTimer 实例化
+        # self.tuning_loop_timer.timeout.connect(self._run_tuning_simulation)
+        # self.tuning_loop_timer.setInterval(int(1000 / 60))
         # -----------------------------------------------------------------
 
 
@@ -316,7 +328,9 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(center_panel, 5)
 
         # 右边面板 (25%)
-        right_panel = self.create_right_panel()
+        # right_panel = self.create_right_panel()
+        right_panel = RightMechanicsPanel()
+        self.right_panel=right_panel
         main_layout.addWidget(right_panel, 2)
 
         # 设置所有面板都扩展到最大高度
@@ -560,6 +574,12 @@ class MainWindow(QMainWindow):
         return panel
 
 
+    # RightMechanicsPanel
+    #def create_right_panel(self):
+
+
+
+    # 旧的粗糙面板
     # def create_right_panel(self):
     #     """创建右边面板 - 纯粹的力学调整"""
     #     panel = QWidget()
@@ -726,55 +746,75 @@ class MainWindow(QMainWindow):
 
     #     # (连接信号在 connect_signals 中完成)
     #     return panel
-    def create_right_panel(self):
-        """创建右边面板 - 纯粹的力学调整 (最终集成版本)"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
+    # def create_right_panel(self):
+    #     """创建右边面板 - 纯粹的力学调整 (最终集成版本)"""
+    #     panel = QWidget()
+    #     layout = QVBoxLayout(panel)
+    #     layout.setSpacing(10)
 
-        # 力学调整器 GroupBox
-        adjust_group = QGroupBox("力学调整")
-        adjust_layout = QVBoxLayout(adjust_group)
+    #     # 力学调整器 GroupBox
+    #     adjust_group = QGroupBox("力学调整")
+    #     adjust_layout = QVBoxLayout(adjust_group)
 
-        # --- 1. 输出/显示区域 (TUNING_INPUT_WIDGHET_AVAILABLE) ---
-        slider_layout = QVBoxLayout()
+    #     # --- 1. 输出/显示区域 (TUNING_INPUT_WIDGHET_AVAILABLE) ---
+    #     slider_layout = QVBoxLayout()
 
-        # 使用 TUNING_INPUT_WIDGHET_AVAILABLE (美化后的仪表盘)
-        if TUNING_INPUT_WIDGHET_AVAILABLE:
-            self.tuning_inputwidget_widget = TuningInputWidget()
-            # 兼容性命名：用于 _update_slider_display 接收参数
-            self.slider_display = self.tuning_inputwidget_widget
-        else:
-            # 回退到 QLabel
-            self.slider_display = QLabel("🎚️ 精密推杆调节器\n(Dial Widget不可用)")
-            self.slider_display.setAlignment(Qt.AlignCenter)
-            self.slider_display.setMinimumHeight(250)
+    #     # 使用 TUNING_INPUT_WIDGHET_AVAILABLE (美化后的仪表盘)
+    #     if TUNING_INPUT_WIDGHET_AVAILABLE:
+    #         self.tuning_inputwidget_widget = TuningInputWidget()
+    #         # 兼容性命名：用于 _update_slider_display 接收参数
+    #         self.slider_display = self.tuning_inputwidget_widget
+    #     else:
+    #         # 回退到 QLabel
+    #         self.slider_display = QLabel("🎚️ 精密推杆调节器\n(Dial Widget不可用)")
+    #         self.slider_display.setAlignment(Qt.AlignCenter)
+    #         self.slider_display.setMinimumHeight(250)
 
-        slider_layout.addWidget(self.slider_display)
+    #     slider_layout.addWidget(self.slider_display)
 
-        # --- 2. 输入区域 (TuningInputWidget - 单旋钮 + 推杆) ---
+    #     # --- 2. 输入区域 (TuningInputWidget - 单旋钮 + 推杆) ---
 
-        # 引入 TuningInputWidget (它包含了旋钮、推杆和联动逻辑)
-        if hasattr(self, 'tuning_input_widget'):
-            # 如果之前已经初始化，则使用已有的实例
-            input_widget = self.tuning_input_widget
-        else:
-            # 否则，创建一个新实例（此逻辑应在 __init__ 中完成，这里只是安全回退）
-            # 由于我们已在 _open_piano_config_dialog 之后移除了复杂控件，我们直接在 __init__ 之后声明
-            input_widget = TuningInputWidget()
+    #     # 引入 TuningInputWidget (它包含了旋钮、推杆和联动逻辑)
+    #     if hasattr(self, 'tuning_input_widget'):
+    #         # 如果之前已经初始化，则使用已有的实例
+    #         input_widget = self.tuning_input_widget
+    #     else:
+    #         # 否则，创建一个新实例（此逻辑应在 __init__ 中完成，这里只是安全回退）
+    #         # 由于我们已在 _open_piano_config_dialog 之后移除了复杂控件，我们直接在 __init__ 之后声明
+    #         input_widget = TuningInputWidget()
 
-        self.tuning_input_widget = input_widget
+    #     self.tuning_input_widget = input_widget
 
-        adjust_layout.addLayout(slider_layout, 6) # 较大的显示区域
-        adjust_layout.addWidget(self.tuning_input_widget, 4) # 输入区域
+    #     adjust_layout.addLayout(slider_layout, 6) # 较大的显示区域
+    #     adjust_layout.addWidget(self.tuning_input_widget, 4) # 输入区域
 
-        # --- 连接信号 (在 connect_signals 中完成) ---
+    #     # --- 连接信号 (在 connect_signals 中完成) ---
 
-        # 让力学调整组扩展到整个右边面板高度
-        layout.addWidget(adjust_group)
-        layout.setStretchFactor(adjust_group, 1)
+    #     # 让力学调整组扩展到整个右边面板高度
+    #     layout.addWidget(adjust_group)
+    #     layout.setStretchFactor(adjust_group, 1)
 
-        return panel
+    #     return panel
+
+    # ===================================================
+    #   MainWindow -> Panel (数据发送函数)
+    # ===================================================
+    def inform_right_target(self, target_freq: float):
+        """设置调律的目标频率，并通知 RightMechanicsPanel。"""
+        if hasattr(self, 'right_panel'):
+            self.right_panel.set_target_frequency(target_freq)
+            # 示例：更新主窗口状态
+            # self.update_status(f"目标频率已设置为: {target_freq:.2f} Hz")
+    def inform_right_current(self, current_freq: float):
+        """设置调律的目标频率，并通知 RightMechanicsPanel。"""
+        if hasattr(self, 'right_panel'):
+            self.right_panel.set_current_frequency(current_freq)
+            # 示例：更新主窗口状态
+            # self.update_status(f"目标频率已设置为: {target_freq:.2f} Hz")
+    def inform_right_params(self,I:float,r:float,k:float,k_d:float):
+        if hasattr(self, 'right_panel'):
+            self.right_panel.set_params(I=I,r=r,k=k,k_d=k_d)
+
 
     def setup_menu_bar(self):
         """设置菜单栏"""
@@ -1002,6 +1042,9 @@ class MainWindow(QMainWindow):
             # TODO: 未来需要通知 MechanicalEngine 模块更新这些参数
             # if self.mechanical_engine:
             #     self.mechanical_engine.update_parameters(new_params)
+
+            self.inform_right_params(self.mech_I,self.mech_r,self.mech_k,self.mech_Kd)
+
         except Exception as e:
             self.update_status(f"更新参数失败: {e}")
             QMessageBox.critical(self, "更新错误", f"更新钢琴参数失败:\n{e}")
@@ -1066,6 +1109,8 @@ class MainWindow(QMainWindow):
         if ok:
             self.mech_Kd = new_Kd
             self.update_status(f"施力敏感度 K_D 已更新为: {new_Kd}")
+            self.inform_right_params(I=self.mech_I,r=self.mech_r,k=self.mech_k,k_d=new_Kd)
+
 
 
         # def _set_accidental_type(self, action: QAction):
@@ -1173,11 +1218,11 @@ class MainWindow(QMainWindow):
         #     self.fine_knob.valueChanged.connect(self._update_fine_knob_input)
         # --- 力学调整器连接 ---
         # 连接 TuningInputWidget 的输入信号到驱动逻辑
-        if hasattr(self, 'tuning_input_widget'):
-            self.tuning_input_widget.input_changed.connect(self._handle_input_change)
-            self.tuning_input_widget.drag_started.connect(self._start_simulation_session)
-            self.tuning_input_widget.drag_ended.connect(self._end_simulation_session)
-        # ----------------------
+        # if hasattr(self, 'tuning_input_widget'):
+        #     self.tuning_input_widget.input_changed.connect(self._handle_input_change)
+        #     self.tuning_input_widget.drag_started.connect(self._start_simulation_session)
+        #     self.tuning_input_widget.drag_ended.connect(self._end_simulation_session)
+        # # ----------------------
 
     def _get_default_recording_path(self) -> str:
         """获取项目默认的录音/分析文件夹路径：工作路径/recordings"""
@@ -1365,14 +1410,16 @@ class MainWindow(QMainWindow):
                 # 1. 更新状态信息
                 self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
 
-                # 2. 更新推杆显示（使用平均偏差）
+                # 2. 通知调整面板（使用平均偏差）
                 # 排除 None 值后计算平均音分偏差
                 cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
                 if cents_values:
                     mean_cents = np.mean(cents_values)
-                    self._update_slider_display(mean_cents)
+                    # self._update_slider_display(mean_cents)
+                    self.inform_right_current(analysis_result.dominant_frequency)
                 else:
-                    self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
+                    # self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
+                    uuuu=1+2
 
                 # 3. 绘制整体波形图 (文件分析的核心可视化)
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
@@ -1610,13 +1657,16 @@ class MainWindow(QMainWindow):
                 self.last_analysis_freq = analysis_result.dominant_frequency
                 self.update_status(f"分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
 
-                # 2. 更新推杆显示（使用平均偏差）
+                # 2. 通知调整面板（使用平均偏差）
                 cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
                 if cents_values:
                     mean_cents = np.mean(cents_values)
-                    self._update_slider_display(mean_cents)
+                    # self._update_slider_display(mean_cents)
+                    self.inform_right_current(analysis_result.dominant_frequency)
+
                 else:
-                    self._update_slider_display(0.0)
+                    # self._update_slider_display(0.0)
+                    uuuu=1+2
 
                 # 3. 绘制整体波形图
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
@@ -1678,7 +1728,7 @@ class MainWindow(QMainWindow):
         self.update_status(status_message)
 
         # 3. 更新精密推杆显示 (slider_display)
-        self._update_slider_display(cents)
+        # self._update_slider_display(cents)
 
         # 4.  更新频谱波图
         # audio_frame = realtime_data.audio_frame
@@ -2088,6 +2138,8 @@ class MainWindow(QMainWindow):
             self.update_status(f"目标音高已切换: {new_key.note_name} ({new_key.frequency:.1f}Hz)")
             if hasattr(self, 'piano_widget') and self.piano_widget is not None:
                 self.highlight_target_key() # 突出显示目标键
+            # 通知调整面板
+            self.inform_right_target(new_key.frequency)
         else:
             self.update_status(f"错误: 未找到音名 {note_name}")
 
@@ -2297,110 +2349,110 @@ class MainWindow(QMainWindow):
 
 
     #=================================以上为废案，不要了===================================
-    def _handle_input_change(self, normalized_input: float):
-        """接收归一化输入，计算 dD/dt"""
-        # 假设最大扭矩输入对应归一化输入 1.0，使用 2.0 作为最大 dD/dt
-        self.user_input_ddt = normalized_input * 2.0
-        self.user_input_torque = self.user_input_ddt * self.mechanical_engine.Kd
+    # def _handle_input_change(self, normalized_input: float):
+    #     """接收归一化输入，计算 dD/dt"""
+    #     # 假设最大扭矩输入对应归一化输入 1.0，使用 2.0 作为最大 dD/dt
+    #     self.user_input_ddt = normalized_input * 2.0
+    #     self.user_input_torque = self.user_input_ddt * self.mechanical_engine.Kd
 
-        # 如果模拟已经在运行，改变输入值即可。
+    #     # 如果模拟已经在运行，改变输入值即可。
 
-    def _start_simulation_session(self):
-        """启动调律模拟会话 (在鼠标左键按下时触发)"""
-        if self.is_simulating: return
+    # def _start_simulation_session(self):
+    #     """启动调律模拟会话 (在鼠标左键按下时触发)"""
+    #     if self.is_simulating: return
 
-        # 1. 检查启动前置条件 (音频分析结果)
-        if self.last_analysis_freq is None:
-            self.update_status("警告：请先执行音频分析以获得初始频率，才能启动调律模拟。")
-            return
+    #     # 1. 检查启动前置条件 (音频分析结果)
+    #     if self.last_analysis_freq is None:
+    #         self.update_status("警告：请先执行音频分析以获得初始频率，才能启动调律模拟。")
+    #         return
 
-        # 2. 初始化力学引擎状态
-        self.on_start_tuning_simulation(self.last_analysis_freq)
+    #     # 2. 初始化力学引擎状态
+    #     self.on_start_tuning_simulation(self.last_analysis_freq)
 
-        # 3. 启动 RK4 计时器 (现在是事件驱动的步进)
-        self.is_simulating = True
-        self.simulation_timer.start() # 计时器开始，将持续调用 _step_simulation
-        self.update_status("调律模拟会话已启动，等待调整...")
+    #     # 3. 启动 RK4 计时器 (现在是事件驱动的步进)
+    #     self.is_simulating = True
+    #     self.simulation_timer.start() # 计时器开始，将持续调用 _step_simulation
+    #     self.update_status("调律模拟会话已启动，等待调整...")
 
-    def _end_simulation_session(self):
-        """结束调律模拟会话 (在鼠标左键松开时触发)"""
-        self.simulation_timer.stop()
-        self.is_simulating = False
-        self.user_input_ddt = 0.0 # 清零输入
+    # def _end_simulation_session(self):
+    #     """结束调律模拟会话 (在鼠标左键松开时触发)"""
+    #     self.simulation_timer.stop()
+    #     self.is_simulating = False
+    #     self.user_input_ddt = 0.0 # 清零输入
 
-        # 确保力学引擎状态静止
-        if self.mechanical_engine:
-            self.mechanical_engine.state.omega = 0.0
+    #     # 确保力学引擎状态静止
+    #     if self.mechanical_engine:
+    #         self.mechanical_engine.state.omega = 0.0
 
-        self.update_status("调律模拟会话结束，张力锁定。")
+    #     self.update_status("调律模拟会话结束，张力锁定。")
 
-    def _step_simulation(self):
-        """RK4 模拟步进方法 (由 QTimer 触发)"""
-        if not self.mechanical_engine or not self.target_key:
-             return
+    # def _step_simulation(self):
+    #     """RK4 模拟步进方法 (由 QTimer 触发)"""
+    #     if not self.mechanical_engine or not self.target_key:
+    #          return
 
-        # 1. 执行 RK4 步进
-        new_state = self.mechanical_engine.step_rk4(self.user_input_torque)
+    #     # 1. 执行 RK4 步进
+    #     new_state = self.mechanical_engine.step_rk4(self.user_input_torque)
 
-        # 2. 获取频率和音分偏差
-        new_freq = self.mechanical_engine.get_current_frequency()
-        target_freq = self.target_key.frequency
-        cents_deviation = self.audio_detector.calculate_cents_deviation(new_freq, target_freq)
+    #     # 2. 获取频率和音分偏差
+    #     new_freq = self.mechanical_engine.get_current_frequency()
+    #     target_freq = self.target_key.frequency
+    #     cents_deviation = self.audio_detector.calculate_cents_deviation(new_freq, target_freq)
 
-        # 3. UI 反馈
-        theta_degrees = np.degrees(new_state.theta)
-        self._update_slider_display(cents_deviation, theta_degrees)
+    #     # 3. UI 反馈
+    #     theta_degrees = np.degrees(new_state.theta)
+    #     self._update_slider_display(cents_deviation, theta_degrees)
 
-        # 4. 更新状态信息
-        status_msg = (f"模拟运行 | 角度: {theta_degrees:.2f}° "
-                      f"| 力矩: {self.user_input_torque:.4f} N·m "
-                      f"| 偏差: {cents_deviation:+.2f} 音分")
-        self.update_status(status_msg)
+    #     # 4. 更新状态信息
+    #     status_msg = (f"模拟运行 | 角度: {theta_degrees:.2f}° "
+    #                   f"| 力矩: {self.user_input_torque:.4f} N·m "
+    #                   f"| 偏差: {cents_deviation:+.2f} 音分")
+    #     self.update_status(status_msg)
 
-        # 5. 检查物理静止 (即使在拖动中，如果内部摩擦锁死，RK4 也会反映出来)
-        if abs(new_state.omega) < self.mechanical_engine.epsilon and abs(self.user_input_ddt) < 1e-4:
-            self._end_simulation_session() # 物理静止，结束会话
+    #     # 5. 检查物理静止 (即使在拖动中，如果内部摩擦锁死，RK4 也会反映出来)
+    #     if abs(new_state.omega) < self.mechanical_engine.epsilon and abs(self.user_input_ddt) < 1e-4:
+    #         self._end_simulation_session() # 物理静止，结束会话
 
-    def _run_tuning_simulation(self):
-        """
-        RK4 模拟主循环：每 dt 步进一次，驱动力学引擎。
-        该方法是 self.tuning_loop_timer 的槽函数。
-        """
-        if not self.mechanical_engine or not self.target_key or not self.audio_detector:
-            # 如果核心组件丢失，停止计时器并返回
-            if self.tuning_loop_timer.isActive():
-                 self.tuning_loop_timer.stop()
-            self.update_status("错误：力学模拟核心依赖缺失，已停止。")
-            return
+    # def _run_tuning_simulation(self):
+    #     """
+    #     RK4 模拟主循环：每 dt 步进一次，驱动力学引擎。
+    #     该方法是 self.tuning_loop_timer 的槽函数。
+    #     """
+    #     if not self.mechanical_engine or not self.target_key or not self.audio_detector:
+    #         # 如果核心组件丢失，停止计时器并返回
+    #         if self.tuning_loop_timer.isActive():
+    #              self.tuning_loop_timer.stop()
+    #         self.update_status("错误：力学模拟核心依赖缺失，已停止。")
+    #         return
 
-        # 1. 执行 RK4 步进
-        # tau_input = user_input_ddt * Kd
-        tau_input = self.user_input_ddt * self.mechanical_engine.Kd
+    #     # 1. 执行 RK4 步进
+    #     # tau_input = user_input_ddt * Kd
+    #     tau_input = self.user_input_ddt * self.mechanical_engine.Kd
 
-        new_state = self.mechanical_engine.step_rk4(tau_input)
+    #     new_state = self.mechanical_engine.step_rk4(tau_input)
 
-        # 2. 获取新的频率和音分偏差
-        new_freq = self.mechanical_engine.get_current_frequency()
-        target_freq = self.target_key.frequency
+    #     # 2. 获取新的频率和音分偏差
+    #     new_freq = self.mechanical_engine.get_current_frequency()
+    #     target_freq = self.target_key.frequency
 
-        # 确保 audio_detector 实例存在，否则无法计算音分
-        cents_deviation = self.audio_detector.calculate_cents_deviation(new_freq, target_freq)
+    #     # 确保 audio_detector 实例存在，否则无法计算音分
+    #     cents_deviation = self.audio_detector.calculate_cents_deviation(new_freq, target_freq)
 
-        # 3. 获取角度 (转换为度)
-        theta_degrees = np.degrees(new_state.theta)
+    #     # 3. 获取角度 (转换为度)
+    #     theta_degrees = np.degrees(new_state.theta)
 
-        # 4. 更新 UI 显示 (使用 TuningDialWidget)
-        self._update_slider_display(cents_deviation, theta_degrees)
+    #     # 4. 更新 UI 显示 (使用 TuningDialWidget)
+    #     self._update_slider_display(cents_deviation, theta_degrees)
 
-        # 5. 更新状态信息
-        status_msg = (f"模拟运行 | 角度Δθ: {theta_degrees:.2f}° "
-                      f"| 张力F: {new_state.string_tension:.1f} N "
-                      f"| 偏差: {cents_deviation:+.2f} 音分")
-        self.update_status(status_msg)
+    #     # 5. 更新状态信息
+    #     status_msg = (f"模拟运行 | 角度Δθ: {theta_degrees:.2f}° "
+    #                   f"| 张力F: {new_state.string_tension:.1f} N "
+    #                   f"| 偏差: {cents_deviation:+.2f} 音分")
+    #     self.update_status(status_msg)
 
-        # 6. 检查停止条件 (静止)
-        # 只有在角速度低于阈值且用户没有输入，才停止计时器。
-        if abs(new_state.omega) < self.mechanical_engine.epsilon and abs(self.user_input_ddt) < 1e-4:
-            self.tuning_loop_timer.stop()
-            self.mechanical_engine.state.omega = 0.0
-            self.update_status(f"模拟静止，张力稳定。最终偏差: {cents_deviation:+.2f} Cents")
+    #     # 6. 检查停止条件 (静止)
+    #     # 只有在角速度低于阈值且用户没有输入，才停止计时器。
+    #     if abs(new_state.omega) < self.mechanical_engine.epsilon and abs(self.user_input_ddt) < 1e-4:
+    #         self.tuning_loop_timer.stop()
+    #         self.mechanical_engine.state.omega = 0.0
+    #         self.update_status(f"模拟静止，张力稳定。最终偏差: {cents_deviation:+.2f} Cents")
