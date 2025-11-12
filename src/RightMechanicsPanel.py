@@ -4,6 +4,10 @@ from PySide6.QtCore import Qt, QRectF, QPointF, Signal,QElapsedTimer,QTimer
 import math
 from MechanicsEngine import MechanicsEngine
 from TuningDialWidget2 import TuningDialWidget2
+from PianoGenerator import PianoKey
+from StringCSVManager import StringCSVManager
+from typing import Dict,Any
+
 
 class RightMechanicsPanel(QWidget):
     """
@@ -16,16 +20,11 @@ class RightMechanicsPanel(QWidget):
         [MouseAdjustBoard] —— 鼠标输入控制 v_user = dD/dt
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None,k_d=50):
         super().__init__(parent)
 
         # ========== 初始化物理引擎 ==========
-        self.mechanics = MechanicsEngine(
-            L=0.5, mu=0.001, inertia=0.002,
-            stiffness=20.0, lever_arm=0.01,
-            viscous_coeff=0.001, drive_gain=500
-        )
-        self.mechanics.set_friction_level("realistic")
+        self.mechanics = MechanicsEngine(k_d=k_d)
 
         # 当前目标频率（可扩展为音高选择器）
         self.target_freq = 440.0
@@ -34,7 +33,7 @@ class RightMechanicsPanel(QWidget):
         # ========== 子部件 ==========
         #self.dial = TuningDial(self)
         self.dial = TuningDialWidget2()
-        self.dial.set_range(50)
+        self.dial.set_range(100)
         self.params = ParameterPanel(self)
         self.board = MouseAdjustBoard(self)
         self.board.velocityChanged.connect(self.apply_velocity)
@@ -51,16 +50,29 @@ class RightMechanicsPanel(QWidget):
     # ===================================================
     #   MainWindow -> Panel (输入接口)
     # ===================================================
-    def set_target_frequency(self, freq: float):
+
+
+    def set_target_key(self,db_manager:StringCSVManager, new_key:PianoKey):
         """设置目标频率，供 MainWindow 调用"""
-        self.target_freq = freq
-        self.dial.target_freq = freq
+        self.target_freq = new_key.frequency
+        self.dial.target_freq = new_key.frequency
+
+        string_param=db_manager.get_string_parameters_by_id(new_key.key_id)
+        self.mechanics.L=string_param.get("length",self.mechanics.L)
+        self.mechanics.mu=string_param.get("density",self.mechanics.mu)
+        self.mechanics.set_initial_state_by_frequency(new_key.frequency)
+
+
         # 强制用新目标频率更新一次 UI
         self.apply_velocity(0.0) # 使用当前速度(可能为0)驱动一次更新
 
     def set_current_frequency(self, freq: float):
         """设置目标频率，供 MainWindow 调用"""
-        self.apply_velocity(0.0)
+        # self.apply_velocity(0.0)
+
+        # 提前计算theta，必须做！！
+        self.mechanics.set_initial_state_by_frequency(freq)
+
         state = self.mechanics.update( v_user=0.0,dt=0.01)
         self.current_state = state
         tension = state["tension"]
@@ -76,6 +88,7 @@ class RightMechanicsPanel(QWidget):
             target=self.target_freq,
             cents=cents,
             tension=tension,
+            theta=self.mechanics.theta,
             velocity=0.0,
             torque_apply=0.0,
             k_d=self.mechanics.k_d
@@ -83,15 +96,14 @@ class RightMechanicsPanel(QWidget):
 
         self.update()
 
-    def set_params(self,I:float,r:float,k:float,k_d:float):
+    def set_params(self, new_params: Dict[str, Any]):
         self.apply_velocity(0.0)
         self.mechanics.update( v_user=0.0,dt=0.01)
-        self.mechanics.I=I
-        self.mechanics.r=r
-        self.mechanics.k=k
-        self.mechanics.v=k_d
+
+        self.mechanics.update_physical_params(new_params)
 
         self.apply_velocity(0.0)
+        self.mechanics.update( v_user=0.0,dt=0.01)
 
         self.update()
 
@@ -129,6 +141,7 @@ class RightMechanicsPanel(QWidget):
             target=self.target_freq,
             cents=cents,
             tension=tension,
+            theta=self.mechanics.theta,
             velocity=v_user,
             torque_apply=v_user * self.mechanics.k_d,
             k_d=self.mechanics.k_d
@@ -202,14 +215,15 @@ class ParameterPanel(QFrame):
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setMinimumHeight(150)
 
-    def update_values(self, freq, target, cents, tension, velocity,torque_apply,k_d):
+    def update_values(self, freq, target, cents, tension,theta, velocity,torque_apply,k_d):
         self.values = {
             "当前频率": f"{freq:.2f} Hz",
             "目标频率": f"{target:.2f} Hz",
             "音分偏差": f"{cents:+.1f} cents",
             "弦张力": f"{tension:.2f} N",
+            "螺丝角度": f"{theta:.2f} rad",
             "输入速度": f"{velocity:+.4f} m/s",
-            "施加扭矩": f"{torque_apply:+.4f} Nm",
+            "施加扭矩": f"{torque_apply:+.2f} Nm",
             "当前k_d": f"{k_d} "
         }
         self.update()
@@ -227,184 +241,7 @@ class ParameterPanel(QFrame):
             y += 25
 
 
-# ===============================================================
-# 鼠标速度输入板
-# ===============================================================
 
-# class MouseAdjustBoard(QFrame):
-#     """
-#     鼠标控制板：
-#         - 鼠标上下移动 → 改变弦位移速度 v_user
-#         - 松开鼠标时速度回归 0
-#     """
-#     velocityChanged = Signal(float)
-
-#     def __init__(self, parent=None):
-#         super().__init__(parent)
-#         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-#         self.setMinimumHeight(200)
-#         self.dragging = False
-#         self.last_y = 0.0
-#         self.v_user = 0.0
-
-#     def mousePressEvent(self, event):
-#         if event.button() == Qt.MouseButton.LeftButton:
-#             self.dragging = True
-#             self.last_y = event.position().y()
-#         event.accept()
-
-#     def mouseMoveEvent(self, event):
-#         if self.dragging:
-#             dy = self.last_y - event.position().y()
-#             self.v_user = dy * 0.002  # 像素 → m/s
-#             self.last_y = event.position().y()
-#             self.velocityChanged.emit(self.v_user)
-#         event.accept()
-
-#     def mouseReleaseEvent(self, event):
-#         if event.button() == Qt.MouseButton.LeftButton:
-#             self.dragging = False
-#             self.v_user = 0.0
-#             self.velocityChanged.emit(0.0)
-#         event.accept()
-
-#     def wheelEvent(self, event):
-#         delta = event.angleDelta().y() / 120
-#         self.v_user += delta * 0.001
-#         self.velocityChanged.emit(self.v_user)
-#         event.accept()
-
-#     def paintEvent(self, event):
-#         painter = QPainter(self)
-#         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-#         rect = self.rect().adjusted(10, 10, -10, -10)
-
-#         # 外框
-#         painter.setBrush(QBrush(QColor(240, 240, 245)))
-#         painter.setPen(QPen(QColor(160, 160, 180), 2))
-#         painter.drawRoundedRect(rect, 8, 8)
-
-#         # 标题
-#         painter.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-#         painter.setPen(QColor(50, 50, 70))
-#         painter.drawText(rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter, "鼠标速度控制板")
-
-#         # 红点显示速度方向
-#         cx = rect.center().x()
-#         cy = rect.center().y()
-#         offset = max(-60, min(60, -self.v_user * 100))
-#         painter.setBrush(QBrush(QColor(220, 80, 80)))
-#         painter.setPen(Qt.PenStyle.NoPen)
-#         painter.drawEllipse(QPointF(cx, cy + offset), 10, 10)
-
-#         # 底部说明
-#         painter.setFont(QFont("Microsoft YaHei", 9))
-#         painter.setPen(QColor(100, 100, 120))
-#         painter.drawText(rect.adjusted(0, 140, 0, 0),
-#                          Qt.AlignmentFlag.AlignHCenter,
-#                          "拖动↑↓控制弦速 (dD/dt)，滚轮微调")
-
-# class MouseAdjustBoard(QFrame):
-#     """
-#     鼠标控制板 (修正版)
-#     ------------------------------------------
-#     - 左键按下开始检测
-#     - 鼠标移动速度 → v_user (dD/dt)
-#     - 鼠标静止时自动归零
-#     - 左键松开时停止
-#     """
-#     velocityChanged = Signal(float)
-
-#     def __init__(self, parent=None):
-#         super().__init__(parent)
-#         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-#         self.setMinimumHeight(200)
-
-#         # 状态控制
-#         self.dragging = False
-#         self.last_y = 0.0
-#         self.last_time = QElapsedTimer()
-#         self.v_user = 0.0
-
-#     # ===================== 鼠标事件 =====================
-
-#     def mousePressEvent(self, event):
-#         if event.button() == Qt.MouseButton.LeftButton:
-#             self.dragging = True
-#             self.last_y = event.position().y()
-#             self.last_time.start()
-#             self.v_user = 0.0
-#             self.velocityChanged.emit(0.0)
-#         event.accept()
-
-#     def mouseMoveEvent(self, event):
-#         if not self.dragging:
-#             return
-
-#         current_y = event.position().y()
-#         current_time = self.last_time.elapsed()  # ms
-
-#         if current_time > 0:
-#             dy = self.last_y - current_y
-#             dt = current_time / 1000.0
-#             # 平滑速度估算
-#             v_est = dy * 0.002 / dt if abs(dy) > 0.1 else 0.0
-#         else:
-#             v_est = 0.0
-
-#         # 更新状态
-#         self.v_user = v_est
-#         self.last_y = current_y
-#         self.last_time.restart()
-
-#         self.velocityChanged.emit(self.v_user)
-#         event.accept()
-
-#     def mouseReleaseEvent(self, event):
-#         if event.button() == Qt.MouseButton.LeftButton:
-#             self.dragging = False
-#             self.v_user = 0.0
-#             self.velocityChanged.emit(0.0)
-#         event.accept()
-
-#     def leaveEvent(self, event):
-#         """鼠标移出控件区域时自动归零"""
-#         if self.dragging:
-#             self.v_user = 0.0
-#             self.velocityChanged.emit(0.0)
-#         event.accept()
-
-#     # ===================== 绘制部分 =====================
-
-#     def paintEvent(self, event):
-#         painter = QPainter(self)
-#         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-#         rect = self.rect().adjusted(10, 10, -10, -10)
-
-#         # 外框
-#         painter.setBrush(QBrush(QColor(240, 240, 245)))
-#         painter.setPen(QPen(QColor(160, 160, 180), 2))
-#         painter.drawRoundedRect(rect, 8, 8)
-
-#         # 标题
-#         painter.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-#         painter.setPen(QColor(50, 50, 70))
-#         painter.drawText(rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter, "鼠标速度控制板")
-
-#         # 红点显示当前速度方向
-#         cx = rect.center().x()
-#         cy = rect.center().y()
-#         offset = max(-60, min(60, -self.v_user * 200))
-#         painter.setBrush(QBrush(QColor(220, 80, 80)))
-#         painter.setPen(Qt.PenStyle.NoPen)
-#         painter.drawEllipse(QPointF(cx, cy + offset), 10, 10)
-
-#         # 底部说明
-#         painter.setFont(QFont("Microsoft YaHei", 9))
-#         painter.setPen(QColor(100, 100, 120))
-#         painter.drawText(rect.adjusted(0, 140, 0, 0),
-#                          Qt.AlignmentFlag.AlignHCenter,
-#                          "左键按下拖动↑↓控制 dD/dt，静止或松手自动归零")
 
 
 class MouseAdjustBoard(QFrame):
@@ -433,11 +270,11 @@ class MouseAdjustBoard(QFrame):
         self.v_filtered = 0.0
 
         # 平滑参数
-        self.alpha = 0.35       # EMA平滑系数
+        self.alpha = 0.25       # EMA平滑系数
         self.deadzone = 0.2     # 像素死区
         self.max_dt = 0.25      # 最大时间间隔 (s)
-        self.scale = 0.002      # 像素→速度比例 (m/s per pixel)
-        self.decay_tau = 0.2    # 松手衰减时间常数 (s)
+        self.scale = 0.001      # 像素→速度比例 (m/s per pixel)
+        self.decay_tau = 0.02    # 松手衰减时间常数 (s)
 
         # 衰减计时器（平滑归零）
         self.decay_timer = QTimer()

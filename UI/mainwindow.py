@@ -329,7 +329,7 @@ class MainWindow(QMainWindow):
 
         # 右边面板 (25%)
         # right_panel = self.create_right_panel()
-        right_panel = RightMechanicsPanel()
+        right_panel = RightMechanicsPanel(parent=self)
         self.right_panel=right_panel
         main_layout.addWidget(right_panel, 2)
 
@@ -799,10 +799,10 @@ class MainWindow(QMainWindow):
     # ===================================================
     #   MainWindow -> Panel (数据发送函数)
     # ===================================================
-    def inform_right_target(self, target_freq: float):
+    def inform_right_target_key(self,new_key: PianoKey):
         """设置调律的目标频率，并通知 RightMechanicsPanel。"""
         if hasattr(self, 'right_panel'):
-            self.right_panel.set_target_frequency(target_freq)
+            self.right_panel.set_target_key(self.db_manager,new_key)
             # 示例：更新主窗口状态
             # self.update_status(f"目标频率已设置为: {target_freq:.2f} Hz")
     def inform_right_current(self, current_freq: float):
@@ -811,9 +811,9 @@ class MainWindow(QMainWindow):
             self.right_panel.set_current_frequency(current_freq)
             # 示例：更新主窗口状态
             # self.update_status(f"目标频率已设置为: {target_freq:.2f} Hz")
-    def inform_right_params(self,I:float,r:float,k:float,k_d:float):
+    def inform_right_params(self, new_params: Dict[str, Any]):
         if hasattr(self, 'right_panel'):
-            self.right_panel.set_params(I=I,r=r,k=k,k_d=k_d)
+            self.right_panel.set_params(new_params)
 
 
     def setup_menu_bar(self):
@@ -1043,7 +1043,7 @@ class MainWindow(QMainWindow):
             # if self.mechanical_engine:
             #     self.mechanical_engine.update_parameters(new_params)
 
-            self.inform_right_params(self.mech_I,self.mech_r,self.mech_k,self.mech_Kd)
+            self.inform_right_params(new_params)
 
         except Exception as e:
             self.update_status(f"更新参数失败: {e}")
@@ -1109,7 +1109,9 @@ class MainWindow(QMainWindow):
         if ok:
             self.mech_Kd = new_Kd
             self.update_status(f"施力敏感度 K_D 已更新为: {new_Kd}")
-            self.inform_right_params(I=self.mech_I,r=self.mech_r,k=self.mech_k,k_d=new_Kd)
+            self.inform_right_params({
+                "mech_Kd" :new_Kd
+            })
 
 
 
@@ -2139,7 +2141,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'piano_widget') and self.piano_widget is not None:
                 self.highlight_target_key() # 突出显示目标键
             # 通知调整面板
-            self.inform_right_target(new_key.frequency)
+            self.inform_right_target_key(new_key)
         else:
             self.update_status(f"错误: 未找到音名 {note_name}")
 
