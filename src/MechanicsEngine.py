@@ -2,6 +2,7 @@
 import numpy as np
 from typing import Dict, Any
 from PianoGenerator import PianoKey
+import math
 
 class MechanicsEngine:
     """
@@ -17,6 +18,7 @@ class MechanicsEngine:
                  I: float = 0.002,     # 转动惯量 I
                  k: float = 20.0,    # 等效刚度 k
                  r: float = 0.01,    # 半径 r
+                 Sigma_valid:float = 210000, # 许用应力
                  k_d: float = 5,     # 驱动增益 k_d
                  sigma: float = 0.001,# 粘滞阻尼 σ
                  tau_fric_limit_0:float=-0.1,
@@ -30,6 +32,7 @@ class MechanicsEngine:
         self.I = I
         self.k = k
         self.r = r
+        self.Sigma_valid= Sigma_valid
         self.k_d = k_d
         # 摩擦参数
         self.sigma = sigma
@@ -79,6 +82,7 @@ class MechanicsEngine:
         self.I = params.get('mech_I', self.I)
         self.r = params.get('mech_r', self.r)
         self.k = params.get('mech_k', self.k)
+        self.Sigma_valid = params.get('mech_Sigma_valid',self.Sigma_valid)
         self.k_d = params.get('mech_Kd', self.k_d)
 
         self.tau_fric_limit_0 = params.get('mech_fric_limit_0', self.tau_fric_limit_0)
@@ -104,13 +108,33 @@ class MechanicsEngine:
 
     def get_tension(self) -> float:
         # 保证非负张力（物理上不能为负）
-        return max(0.0, 4.0 * self.k * (self.r ** 2) * self.theta)
+        return max(0.0, (4 * self.k * (self.r**2) * abs(self.theta)))
 
     def get_frequency(self) -> float:
         F = self.get_tension()
         if F <= 0.0:
             return 0.0
         return (1.0 / (2.0 * self.L)) * np.sqrt(F / self.mu)
+
+    def calculate_theta_for_frequency(self,freq:float):
+        if freq <= 0.0:
+            return 0.0
+        denom = self.k * (self.r ** 2)
+        if denom == 0:
+            return 0.0
+        return (self.L ** 2) * (freq ** 2) * self.mu / denom
+
+    def _compute_theta_loose_threshold(self):
+        """
+        根据静态松弦条件 kr^2 * theta < tau0 + alpha * theta
+        → (k r^2 - alpha) * theta < tau0
+        注意：我们必须满足 (k r^2 - alpha) < 0 才会出现松弦区
+        """
+        den = self.k * (self.r ** 2) - self.alpha
+        if den >= 0:
+            return None  # 永远不会松弦
+        return self.tau_fric_limit_0 / den  # 正数阈值（因为 tau0<0, den<0）
+
 
     # -------------------------
     # 内部力矩计算
@@ -165,6 +189,7 @@ class MechanicsEngine:
         以 v_user (m/s) 为输入，做一次 RK4 积分步，返回状态字典
         注意：当静摩擦锁住时，返回的 omega 会被保持为0，theta不改变。
         """
+
         self.v_user = v_user
         y = np.array([self.theta, self.omega], dtype=float)
 
@@ -188,28 +213,29 @@ class MechanicsEngine:
         if abs(self.omega) < 1e-8:
             self.omega = 0.0
 
+        # -------- 静态松弦判据 --------
+        theta_loose_threshold = self._compute_theta_loose_threshold()
+        if theta_loose_threshold is not None:
+            loose = (self.theta < theta_loose_threshold)
+        else:
+            loose = False
+
+        # -------- 断弦判据 --------
+        tension_limit = self.Sigma_valid * math.pi * (self.r ** 2)
+        broken = (self.get_tension() > tension_limit)
+
+
         return {
             "theta": self.theta,
             "omega": self.omega,
             "displacement": self.get_displacement(),
             "tension": self.get_tension(),
             "frequency": self.get_frequency(),
-            "v_user": v_user
+            "v_user": v_user,
+            "loose": loose,
+            "theta_loose_threshold": theta_loose_threshold,
+            "broken": broken,
+            "max_tension": tension_limit
         }
 
-
-# # 简单测试脚本（运行查看输出）
-# if __name__ == "__main__":
-#     mech = MechanicsEngine(L=0.5, mu=0.001, inertia=0.002,
-#                           stiffness=20.0, lever_arm=0.01,
-#                           viscous_coeff=0.002, drive_gain=0.6)
-#     mech.set_friction_level("realistic")
-
-#     dt = 0.005
-#     for i in range(400):
-#         # 前 120 步施加正速度，之后停止
-#         v = 0.002 if i < 120 else 0.0
-#         s = mech.update(v, dt)
-#         if i % 20 == 0:
-#             print(f"t={i*dt:.3f}s v_user={v:.4f} θ={s['theta']:.6f} ω={s['omega']:.6f} f={s['frequency']:.2f}Hz")
 

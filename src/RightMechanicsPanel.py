@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QFrame,QDialog,QHBoxLayout,QPushButton,
+                                QSizePolicy,QGroupBox,QRadioButton,QFormLayout,QDoubleSpinBox,
+                                QMessageBox)
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal,QElapsedTimer,QTimer
 import math
@@ -7,6 +9,7 @@ from TuningDialWidget2 import TuningDialWidget2
 from PianoGenerator import PianoKey
 from StringCSVManager import StringCSVManager
 from typing import Dict,Any
+import numpy as np
 
 
 class RightMechanicsPanel(QWidget):
@@ -30,21 +33,125 @@ class RightMechanicsPanel(QWidget):
         self.target_freq = 440.0
         self.current_state = {}
 
+        # 施力模式状态
+        self.force_mode = "speed_map"     # 初始模式: 'speed_map' 或 'predefined_force'
+        self.predefined_force = 100      # 预定义力矩 (N·m)
+
         # ========== 子部件 ==========
-        #self.dial = TuningDial(self)
         self.dial = TuningDialWidget2()
         self.dial.set_range(100)
         self.params = ParameterPanel(self)
         self.board = MouseAdjustBoard(self)
+
+        # 按钮面板
+        self.button_panel = ButtonPanel(self)
+        self.button_panel.repairClicked.connect(self._on_repair_clicked)
+        self.button_panel.forceModeClicked.connect(self._on_force_mode_clicked)
+
+        # MouseAdjustBoard 发出的速度信号连接到新的施力逻辑
         self.board.velocityChanged.connect(self.apply_velocity)
 
         # ========== 布局 ==========
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.addWidget(self.dial)
-        layout.addWidget(self.params)
-        layout.addWidget(self.board)
+        layout.addWidget(self.dial,3.75)
+        layout.addWidget(self.params,4)
+        layout.addWidget(self.button_panel,0.1)
+        layout.addWidget(self.board,2)
         self.setLayout(layout)
+
+
+    # ===================================================
+    # UI 交互槽函数
+    # ===================================================
+    # def _on_repair_clicked(self):
+    #     """
+    #     槽函数：一键修复 (校准) 逻辑
+    #     将当前弦轴角度 θ 直接设置为目标频率 F_target 对应的角度 θ_target
+    #     并锁定，即 F_current = F_target，cents = 0。
+    #     """
+    #     # 1. 计算目标频率对应的角度
+    #     theta_target = self.mechanics.calculate_theta_for_frequency(self.target_freq)
+
+    #     # 2. 强制设置 MechanicsEngine 状态
+    #     self.mechanics.reset(theta=theta_target, omega=0.0)
+
+    #     # 3. 强制更新 UI
+    #     self.apply_velocity(0.0)
+
+    #     QMessageBox.information(self, "校准成功",
+    #                             f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.4f} rad)。")
+
+    def _on_repair_clicked(self):
+        """
+        一键修复（校准）：
+        - 计算目标角度 theta_target（用正确公式）
+        - 如果 theta_target < 静态松弦阈值（theta_loose），提示用户并自动选择动作：
+            - 默认：将 theta 设为阈值 + 小余量，保证稳定
+          若阈值无意义（参数不允许松弦），直接设置目标角度。
+        - 重置 omega = 0，刷新 UI
+        """
+        # 1. 计算目标频率对应的角度（使用修正后的 calculate_theta_for_frequency）
+        theta_target = self.mechanics.calculate_theta_for_frequency(self.target_freq)
+
+        # 2. 计算静态松弦阈值（如果你的 MechanicsEngine 有类似方法）
+        #    如果没有该方法，请参考 MechanicsEngine._compute_theta_loose_threshold 的实现并加上
+        theta_loose = None
+        # 尝试调用（如果你已按之前建议添加了 _compute_theta_loose_threshold）
+        if hasattr(self.mechanics, "_compute_theta_loose_threshold"):
+            theta_loose = self.mechanics._compute_theta_loose_threshold()
+
+        # 3. 如果阈值存在且目标在阈值以下，提示用户并自动补偿到阈值上（微小余量）
+        if theta_loose is not None:
+            if theta_target < theta_loose:
+                # 弹出提示，说明原因并将目标调整为阈值+余量
+                reply = QMessageBox.question(
+                    self, "松弦预警：目标角度低于松弦阈值",
+                    ("目标角度对应的 θ 低于静态松弦阈值，"
+                     "直接设置会导致螺丝未吃入摩擦区（松弦），修复后无法保持。\n\n"
+                     f"目标 θ = {theta_target:.6f} rad\n"
+                     f"松弦阈值 θ_loose = {theta_loose:.6f} rad\n\n"
+                     "是否将修复角度自动提升到阈值以保证稳定？\n"
+                     "（选择 否=仍设为目标θ，可能会被判为松弦）"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    # 加入微小余量，避免数值边界问题
+                    theta_target = theta_loose + max(1e-6, theta_loose * 1e-3)
+                # 如果用户选择 No，则保持原目标 theta_target（但可能马上被判为松弦）
+        # 4. 强制设置 MechanicsEngine 状态
+        self.mechanics.reset(theta=theta_target, omega=0.0)
+
+        # 5. 强制更新 UI（一次完整更新）
+        self.apply_velocity(0.0)
+
+        QMessageBox.information(self, "校准成功",
+                                f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.6f} rad)。")
+
+
+    def _on_force_mode_clicked(self):
+        """槽函数：打开施力方式配置窗口"""
+        dialog = ForceModeDialog(
+            k_d=self.mechanics.k_d,
+            predef_force=self.predefined_force,
+            force_mode=self.force_mode,
+            parent=self
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            config = dialog.get_config()
+
+            # 更新 MechanicsEngine 和 Panel 状态
+            self.mechanics.k_d = config["k_d"]
+            self.predefined_force = config["predefined_force"]
+            self.force_mode = config["force_mode"]
+
+            self.apply_velocity(self.board.v_user) # 用新模式和参数更新一次状态
+
+            mode_name = "速度映射模式" if self.force_mode == "speed_map" else "预定义力模式"
+            QMessageBox.information(self, "施力方式更新",
+                                    f"施力模式已切换为：{mode_name}。\n驱动增益 k_d: {self.mechanics.k_d:.1f}")
 
 
     # ===================================================
@@ -109,32 +216,127 @@ class RightMechanicsPanel(QWidget):
 
 
     # ===================================================
-    #     力学联动逻辑
+    #     力学联动逻辑  老版本，只有鼠标速度映射模式
     # ===================================================
+    # def apply_velocity(self, v_user: float):
+    #     """
+    #     鼠标调整板发出速度输入 v_user（m/s）
+    #     传递给 MechanicsEngine，并实时更新 UI
+    #     """
+    #     state = self.mechanics.update(v_user=v_user, dt=0.01)
+    #     self.current_state = state
+
+    #     freq = state["frequency"]
+    #     tension = state["tension"]
+
+    #     # 计算音分偏差
+    #     cents = 0.0
+    #     if freq > 0:
+    #         cents = 1200 * math.log2(freq / self.target_freq)
+
+    #     # 更新子部件
+    #     self.dial.set_cents(cents)
+
+    #     # 3.1. 修正：更新 TuningDialWidget2 (使用频率和目标频率)
+    #     self.dial.set_frequencies(freq, self.target_freq)
+
+    #     # # 3.2. 更新 ParameterPanel
+    #     # drive_gain = getattr(self.mechanics, 'drive_gain', 5000)
+
+    #     self.params.update_values(
+    #         freq=freq,
+    #         target=self.target_freq,
+    #         cents=cents,
+    #         tension=tension,
+    #         theta=self.mechanics.theta,
+    #         velocity=v_user,
+    #         torque_apply=v_user * self.mechanics.k_d,
+    #         k_d=self.mechanics.k_d
+    #     )
+
+    #     self.update()
+    # 新版本，有速度映射和预定义力
     def apply_velocity(self, v_user: float):
         """
         鼠标调整板发出速度输入 v_user（m/s）
-        传递给 MechanicsEngine，并实时更新 UI
+        根据当前施力模式，将 v_user 转换为 MechanicsEngine 的驱动输入，并实时更新 UI
         """
-        state = self.mechanics.update(v_user=v_user, dt=0.01)
+        # 根据施力模式，决定实际传递给 MechanicsEngine 的 v_user
+        if self.force_mode == "predefined_force":
+            # 预定义力模式：鼠标速度只用于决定方向和是否静止
+            if abs(v_user) < 1e-4:
+                # 鼠标静止，输入速度为0
+                input_v = 0.0
+            else:
+                # 鼠标移动，输入速度决定方向，大小由预定义力 F_p / k_d 确定
+                # 目的：驱动扭矩 τ_drive ≈ F_p，所以 v_user ≈ F_p / k_d
+                sign = np.sign(v_user)
+                input_v = sign * (self.predefined_force / self.mechanics.k_d)
+
+            # 施加扭矩的显示值 (简化为预定义力矩)
+            torque_display = sign * self.predefined_force if abs(input_v) > 0 else 0.0
+
+        else: # "speed_map" 速度映射模式
+            # 默认模式：v_user 直接映射
+            input_v = v_user
+            # 施加扭矩的显示值 (简化为 k_d * v_user)
+            torque_display = input_v * self.mechanics.k_d
+
+
+        # 1. 执行 MechanicsEngine 更新
+        state = self.mechanics.update(v_user=input_v, dt=0.01)
+        # ---- 弦松警告（只提示一次） ----
+        if state.get("loose", False):
+            if not getattr(self, "_warned_loose", False):
+                theta = state["theta"]
+                theta_loose = state["theta_loose_threshold"]
+
+                QMessageBox.warning(
+                    self, "⚠ 弦松警告",
+                    f"当前螺丝角度过小，尚未吃入摩擦区（松弦）。\n\n"
+                    f"当前 θ：{theta:.6f} rad\n"
+                    f"松弦阈值 θ_loose：{theta_loose:.6f} rad\n\n"
+                    f"请轻轻上紧弦轴直到超过松弦阈值。"
+                )
+                self._warned_loose = True
+        else:
+            self._warned_loose = False
+
+        # ---- 断弦警告 ----
+        if state.get("broken", False):
+            if not getattr(self, "_warned_broken", False):
+                T = state["tension"]
+                Tmax = state["max_tension"]
+                sigma = T / (math.pi * self.mechanics.r * self.mechanics.r)
+                sigma_valid = self.mechanics.Sigma_valid
+
+                QMessageBox.critical(
+                    self, "⚠ 断弦警告",
+                    f"弦张力已超过材料允许极限！\n"
+                    f"弦可能已经断裂，请立即停止调节。\n\n"
+                    f"当前张力 T：{T:.2f} N\n"
+                    f"断弦极限 T_max：{Tmax:.2f} N\n\n"
+                    f"当前应力 σ：{sigma:.2f} MPa\n"
+                    f"材料允许应力 σ_valid：{sigma_valid:.2f} MPa"
+                )
+                self._warned_broken = True
+        else:
+            self._warned_broken = False
+
+
         self.current_state = state
 
+        # 2. 更新 UI 显示
         freq = state["frequency"]
         tension = state["tension"]
 
-        # 计算音分偏差
+        # 3. 计算音分偏差
         cents = 0.0
-        if freq > 0:
+        if freq > 0 and self.target_freq > 0:
             cents = 1200 * math.log2(freq / self.target_freq)
 
-        # 更新子部件
-        self.dial.set_cents(cents)
-
-        # 3.1. 修正：更新 TuningDialWidget2 (使用频率和目标频率)
+        # 4. 更新子部件
         self.dial.set_frequencies(freq, self.target_freq)
-
-        # # 3.2. 更新 ParameterPanel
-        # drive_gain = getattr(self.mechanics, 'drive_gain', 5000)
 
         self.params.update_values(
             freq=freq,
@@ -142,8 +344,8 @@ class RightMechanicsPanel(QWidget):
             cents=cents,
             tension=tension,
             theta=self.mechanics.theta,
-            velocity=v_user,
-            torque_apply=v_user * self.mechanics.k_d,
+            velocity=v_user, # 保持显示原始鼠标速度
+            torque_apply=torque_display, # 显示施加扭矩的简化值
             k_d=self.mechanics.k_d
         )
 
@@ -391,6 +593,115 @@ class MouseAdjustBoard(QFrame):
         painter.drawText(rect.adjusted(0, 140, 0, 0),
                          Qt.AlignmentFlag.AlignHCenter,
                          f"v_user = {self.v_user:+.4f} m/s")
+
+
+
+ # ===============================================================
+ # 施力方式配置对话框
+ # ===============================================================
+
+class ForceModeDialog(QDialog):
+    """用于配置施力模式和相关参数的对话框"""
+    def __init__(self, k_d: float, predef_force: float, force_mode: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("施力方式配置")
+
+        self.k_d = k_d
+        self.predef_force = predef_force
+        self.force_mode = force_mode
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        main_layout = QVBoxLayout(self)
+
+        # 模式选择
+        mode_group = QGroupBox("施力模式选择")
+        mode_layout = QVBoxLayout(mode_group)
+
+        self.radio_speed = QRadioButton("速度映射模式 (D_dot → 力矩)")
+        self.radio_force = QRadioButton("预定义力模式 (D_dot → ±预定义力矩)")
+
+        mode_layout.addWidget(self.radio_speed)
+        mode_layout.addWidget(self.radio_force)
+
+        if self.force_mode == "speed_map":
+            self.radio_speed.setChecked(True)
+        else:
+            self.radio_force.setChecked(True)
+
+        main_layout.addWidget(mode_group)
+
+        # 参数配置
+        param_group = QGroupBox("参数配置")
+        form_layout = QFormLayout(param_group)
+
+        # 1. k_d 配置
+        self.input_k_d = QDoubleSpinBox()
+        self.input_k_d.setRange(0.01, 1000.0)
+        self.input_k_d.setDecimals(1)
+        self.input_k_d.setValue(self.k_d)
+        form_layout.addRow(QLabel("驱动增益 k_d (Nm·s/m):"), self.input_k_d)
+
+        # 2. 预定义力配置
+        self.input_predef_force = QDoubleSpinBox()
+        self.input_predef_force.setRange(0.01, 1000000)
+        self.input_predef_force.setDecimals(4)
+        self.input_predef_force.setValue(self.predef_force)
+        form_layout.addRow(QLabel("预定义力矩 (Nm):"), self.input_predef_force)
+
+        main_layout.addWidget(param_group)
+
+        # 按钮
+        button_layout = QHBoxLayout()
+        btn_save = QPushButton("确定")
+        btn_cancel = QPushButton("取消")
+
+        btn_save.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        button_layout.addStretch(1)
+        button_layout.addWidget(btn_save)
+        button_layout.addWidget(btn_cancel)
+
+        main_layout.addLayout(button_layout)
+
+    def get_config(self) -> Dict[str, Any]:
+        """返回新的配置"""
+        new_mode = "speed_map" if self.radio_speed.isChecked() else "predefined_force"
+        return {
+        "k_d": self.input_k_d.value(),
+        "predefined_force": self.input_predef_force.value(),
+        "force_mode": new_mode
+        }
+
+ # ===============================================================
+ # 按钮控制面板
+ # ===============================================================
+
+class ButtonPanel(QWidget):
+    """包含 一键修复 和 施力方式 按钮的面板"""
+    repairClicked = Signal()
+    forceModeClicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self.btn_repair = QPushButton("一键修复 (校准)")
+        self.btn_force_mode = QPushButton("施力方式 (配置)")
+
+        self.btn_repair.clicked.connect(self.repairClicked.emit)
+        self.btn_force_mode.clicked.connect(self.forceModeClicked.emit)
+
+        # 样式调整
+        self.btn_repair.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.btn_force_mode.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        layout.addWidget(self.btn_repair)
+        layout.addWidget(self.btn_force_mode)
 
 
 

@@ -1,12 +1,14 @@
 {
-    "mech_I": 0.002,
-    "mech_r": 0.0234,
-    "mech_k": 3000000.0,
+    "mech_I": 0.1,
+    "mech_r": 0.023,
+    "mech_k": 30.0,
+    "mech_Sigma_valid": 200000.0,
     "mech_Kd": 0.5,
     "mech_friction_model": "Limit_Friction",
-    "mech_fric_limit_0": 0.35,
-    "mech_alpha": 0.05,
+    "mech_fric_limit_0": -10.0,
+    "mech_alpha": 20.0,
     "mech_kinetic": 0.08,
     "mech_sigma": 0.001,
-    "db_file_path": "D:/PianoTunning/PT/data/custom_strings_1.csv"
+    "db_file_path": "D:/PianoTunning/PT/data/custom_strings_1.csv",
+    "mech_Siama_valid": 200000.0
 }

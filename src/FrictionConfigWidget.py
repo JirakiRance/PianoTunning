@@ -27,22 +27,22 @@ class FrictionConfigWidget(QWidget):
 
         # 1. 初始静摩擦极限 τ_fric_limit_0 (N·m)
         self.input_fric_limit_0 = self._create_double_spin_box(
-            self.current_params.get('mech_fric_limit_0', 0.1), 0.0, 1.0, 4)
+            self.current_params.get('mech_fric_limit_0', 0.1), -1000.0, 1000.0, 4)
         form_layout.addRow(QLabel("初始静摩擦极限 τ_0 (N·m):"), self.input_fric_limit_0)
 
         # 2. 静摩擦增长系数 α (N·m/rad)
         self.input_alpha = self._create_double_spin_box(
-            self.current_params.get('mech_alpha', 0.05), 0.0, 1.0, 4)
+            self.current_params.get('mech_alpha', 0.05), 0.0,1000.0, 4)
         form_layout.addRow(QLabel("静摩擦增长系数 α (N·m/rad):"), self.input_alpha)
 
         # 3. 动摩擦扭矩 τ_kinetic (N·m)
         self.input_kinetic = self._create_double_spin_box(
-            self.current_params.get('mech_kinetic', 0.08), 0.0, 1.0, 4)
+            self.current_params.get('mech_kinetic', 0.08), 0.0, 1000.0, 4)
         form_layout.addRow(QLabel("动摩擦扭矩 τ_kinetic (N·m):"), self.input_kinetic)
 
         # 4. 粘性摩擦系数 σ (N·m·s/rad)
         self.input_sigma = self._create_double_spin_box(
-            self.current_params.get('mech_sigma', 0.001), 0.0, 0.1, 5)
+            self.current_params.get('mech_sigma', 0.001), 0.0, 1.0, 5)
         form_layout.addRow(QLabel("粘性摩擦系数 σ (N·m·s/rad):"), self.input_sigma)
 
         main_layout.addWidget(model_group)

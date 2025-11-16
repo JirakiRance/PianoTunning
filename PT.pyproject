@@ -5,6 +5,7 @@
         "main.py",
         "res.qrc",
         "src/AudioDetector.py",
+        "src/AudioEngine.py",
         "src/ConfigManager.py",
         "src/FrictionConfigWidget.py",
         "src/MechanicalEngine.py",

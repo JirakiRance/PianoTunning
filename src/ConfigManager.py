@@ -60,6 +60,7 @@ class ConfigManager:
         'mech_I': 0.0001,      # 转动惯量 I (kg·m²)
         'mech_r': 0.005,       # 弦轴半径 r (m)
         'mech_k': 500000.0,    # 弦劲度系数 k (N/m)
+        'mech_Sigma_valid': 2100000, #许用应力 [σ]
         'mech_Kd': 0.5,        # 施力敏感度 K_D (N·m·s/rad)
 
         # 摩擦模型参数 (全局)
@@ -81,7 +82,6 @@ class ConfigManager:
 
     def load_config(self) -> Dict[str, Any]:
         """从文件加载配置，如果文件不存在或加载失败，则返回默认配置。"""
-        # ... (加载逻辑，与上一步提供的代码保持一致) ...
         if not os.path.exists(self.config_path):
             print(f"配置文件未找到，使用默认配置: {self.config_path}")
             return self.DEFAULT_CONFIG.copy()
@@ -99,21 +99,7 @@ class ConfigManager:
             print(f"加载配置文件失败 ({e})，使用默认配置。")
             return self.DEFAULT_CONFIG.copy()
 
-    # def save_config(self, config: Dict[str, Any]) -> bool:
-    #     """将当前配置保存到文件。"""
-    #     # ... (保存逻辑，与上一步提供的代码保持一致) ...
-    #     try:
-    #         # 清理 None 值
-    #         if config.get('db_file_path') is None:
-    #              del config['db_file_path']
 
-    #         with open(self.config_path, 'w', encoding='utf-8') as f:
-    #             json.dump(config, f, indent=4)
-    #         print(f"配置保存成功: {self.config_path}")
-    #         return True
-    #     except Exception as e:
-    #         print(f"保存配置文件失败: {e}")
-    #         return False
     def save_config(self, config: Dict[str, Any]) -> bool:
         """将当前配置保存到文件。"""
         try:

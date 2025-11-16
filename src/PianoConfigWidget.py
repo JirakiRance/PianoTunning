@@ -47,16 +47,21 @@ class PianoConfigWidget(QWidget):
         # 参数列表: I, r, k (劲度系数)
 
         # a. 弦轴转动惯量 I (kg·m²)
-        self.input_I = self._create_double_spin_box(self.current_params.get('mech_I', 0.0001), 0.0, 1.0, 5)
+        self.input_I = self._create_double_spin_box(self.current_params.get('mech_I', 0.0001), 0.0, 1000.0, 5)
         form_layout.addRow(QLabel("转动惯量 I (kg·m²):"), self.input_I)
 
         # b. 弦轴半径 r (m)
-        self.input_r = self._create_double_spin_box(self.current_params.get('mech_r', 0.005), 0.001, 0.1, 4)
+        self.input_r = self._create_double_spin_box(self.current_params.get('mech_r', 0.005), 0.001, 0.5, 4)
         form_layout.addRow(QLabel("弦轴半径 r (m):"), self.input_r)
 
         # c. 弦劲度系数 k (N/m) (用于计算张力变化)
-        self.input_k = self._create_double_spin_box(self.current_params.get('mech_k', 500000.0), 1000.0, 10000000.0, 0)
+        self.input_k = self._create_double_spin_box(self.current_params.get('mech_k', 500000.0), 1.0, 100000000.0, 0)
         form_layout.addRow(QLabel("弦劲度系数 k (N/m):"), self.input_k)
+
+
+        # d. 许用应力 \sigma_valid (MGa) 计算弦断
+        self.input_sigma_valid = self._create_double_spin_box(self.current_params.get('mech_Sigma_valid', 210000), 0.0,100000000, 5)
+        form_layout.addRow(QLabel("琴弦许用应力 [σ] (MPa):"), self.input_sigma_valid)
 
         main_layout.addWidget(general_group)
 
@@ -137,28 +142,7 @@ class PianoConfigWidget(QWidget):
             self.btn_open_db.setEnabled(False)
         self._update_db_display()
 
-    # def _is_file_valid(self, file_path: str) -> bool:
-    #     """校验 CSV 文件头是否包含所需的字段"""
-    #     if not os.path.exists(file_path):
-    #         return False
 
-    #     try:
-    #         with open(file_path, 'r', newline='', encoding='utf-8') as f:
-    #             # 只读取第一行（文件头）
-    #             reader = csv.reader(f)
-    #             header = next(reader, None)
-
-    #             required_fields = ['key_id', 'note_name', 'length', 'density']
-
-    #             if header is None:
-    #                 return False
-
-    #             # 检查所有必需字段是否都存在
-    #             return all(field in header for field in required_fields)
-
-    #     except Exception as e:
-    #         print(f"校验文件 {file_path} 失败: {e}")
-    #         return False
     def _is_file_valid(self, file_path: str) -> bool:
         """
         校验 CSV 文件头是否包含所需的字段。
@@ -272,40 +256,7 @@ class PianoConfigWidget(QWidget):
                 parent_dialog.reject()
             else:
                 self.close()
-    # def _cancel_and_exit(self):
-    #     # """处理 '取消' 按钮点击。如果当前文件无效，则提示并尝试恢复。"""
-    #     if self.parent():
-    #         # 使用 reject() 告诉父级 Dialog 数据未保存，并关闭窗口
-    #         print("有父亲")
-    #         self.parent().reject()
-        # current_path = self.db_manager.get_connected_path()
-        # required_fields = ['key_id', 'note_name', 'length', 'density']
-        # # 1. 如果当前文件有效，则直接拒绝父级对话框 (不保存参数)
-        # if self._is_file_valid(current_path):
-        #     if self.parent():
-        #         self.parent().reject()
-        #     return
-        # # 2. 文件无效：提示用户并询问如何处理
-        # reply = QMessageBox.critical(
-        #     self,
-        #     "警告：当前文件不安全",
-        #     f"当前的琴弦数据文件 ({os.path.basename(current_path)}) 不完整或格式错误。\n"
-        #     f"退出配置界面，您是否需要程序切换回安全的默认文件？\n\n"
-        #     f"选择 '是' 将切换到默认文件后退出。\n选择 '否' 将拒绝退出，允许您继续修正。",
-        #     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        # )
 
-        # if reply == QMessageBox.StandardButton.Yes:
-        #     # 尝试恢复到默认文件或重建
-        #     if self._switch_to_safe_file():
-        #          if self.parent(): self.parent().reject() # 切换成功，允许退出 (reject)
-        #     else:
-        #          QMessageBox.critical(self, "致命错误", "无法切换到安全文件，请手动修复。")
-        #          # 拒绝退出 (reject 逻辑在 self.parent().reject() 处处理)
-        # else:
-        #     # 用户选择 '否' (拒绝退出)
-        #     QMessageBox.information(self, "操作提醒", "已取消退出，请手动修正当前文件或重新选择。")
-        #     # 窗口保持开启状态，不调用 reject()
 
     def _switch_to_safe_file(self) -> bool:
         """尝试切换到有效的默认文件或重建，并返回成功状态"""
@@ -379,13 +330,7 @@ class PianoConfigWidget(QWidget):
     # 更新文件路径显示
     def _update_db_display(self):
         """从 CSVManager 获取文件路径并显示"""
-        # if self.db_manager:
-        #     self.label_db_path.setText(self.db_manager.get_connected_path())
-        #     self.label_db_path.setToolTip(self.db_manager.get_connected_path())
-        #     # 根据文件是否存在来启用/禁用编辑按钮
-        #     self.btn_open_db.setEnabled(os.path.exists(self.db_manager.get_connected_path()))
-        # else:
-        #     self.label_db_path.setText("数据管理器不可用")
+
         if self.db_manager:
             current_path = self.db_manager.get_connected_path()
             file_exists = os.path.exists(current_path)
@@ -414,19 +359,7 @@ class PianoConfigWidget(QWidget):
         打开琴弦参数编辑器（L 和 μ）的占位方法。
         实际表格编辑器将在未来迭代中实现。
         """    
-        # if not os.path.exists(current_path):
-        #     QMessageBox.warning(self, "文件不存在", "请先通过 '更改文件' 指定一个有效的 CSV 文件。")
-        #     return
-        # QMessageBox.information(self, "功能待实现",
-        #                        f"琴弦参数编辑表格功能待实现。\n"
-        #                        f"当前文件: {current_path}\n"
-        #                        f"点击 '确定' 将读取文件内容（仅供调试）。")
-        # 校验当前活动文件
-        # if not os.path.exists(current_path) or not self._is_file_valid(current_path):
-        #     QMessageBox.warning(self, "文件不可用",
-        #                         "当前数据文件不可用或格式不正确。\n"
-        #                         "请使用 '新建' 或 '选择现有文件' 按钮设置有效文件。")
-        #     return
+
         if not self.db_manager:
             QMessageBox.critical(self, "错误", "CSV 管理器未初始化。")
             return
@@ -435,18 +368,6 @@ class PianoConfigWidget(QWidget):
         if not os.path.exists(current_path):
             QMessageBox.warning(self, "文件不存在", "当前数据文件不存在，请先 '新建' 或 '选择现有文件'。")
             return
-        # # 尝试读取数据 (依赖 StringCSVManager)
-        # data = self.db_manager.get_string_parameters()
-        # # 给出编辑占位提示和数据预览
-        # if data:
-        #     QMessageBox.information(self, "编辑功能待实现",
-        #                             f"编辑表格功能待实现。\n"
-        #                             f"文件已打开，读取到 {len(data)} 条记录。\n"
-        #                             f"请在功能实现后，点击 '修改当前参数' 进行编辑。")
-        # else:
-        #     QMessageBox.warning(self, "编辑功能待实现",
-        #                         f"编辑表格功能待实现。\n"
-        #                         f"已打开文件，但未读取到有效琴弦数据。请编辑文件头和内容。")
         try:
             # 启动外部程序打开文件
             if sys.platform == "win32":
@@ -509,11 +430,7 @@ class PianoConfigWidget(QWidget):
         # .强制校验当前琴弦数据文件
         current_path = self.db_manager.get_connected_path()
         required_fields = ['key_id', 'note_name', 'length', 'density']
-        # if not self._is_file_valid(current_path):
-        #     QMessageBox.critical(self, "保存失败",
-        #                          "琴弦参数文件校验失败，请先通过 '修改当前参数' 按钮编辑并补全所有字段后才能保存。")
-        #     print(f"DEBUG: Save check result: {self._is_file_valid(current_path)}")
-        #     return
+
         # 1. 校验文件头
         if not self._is_file_valid(current_path):
             QMessageBox.critical(self, "保存失败", "琴弦参数文件头格式错误，缺少 'key_id', 'length' 等关键字段！")
@@ -529,11 +446,13 @@ class PianoConfigWidget(QWidget):
             'mech_I': self.input_I.value(),
             'mech_r': self.input_r.value(),
             'mech_k': self.input_k.value(),
+            'mech_Sigma_valid': self.input_sigma_valid.value(),
             'db_file_path': current_path
         }
 
         # 发出信号，将新参数字典传递给 MainWindow
         self.config_saved.emit(new_params)
+        print(f"PianoWidget发出_save_config\n{new_params}")
         if self.parent():
             self.parent().accept() # 关闭对话框，通知 MainWindow 保存成功
 
@@ -553,31 +472,6 @@ class PianoConfigWidget(QWidget):
             # 校验成功，允许关闭
             self.request_close.emit(True)
             return
-
-        # 2. 校验失败：询问用户是否重建
-        # reply = QMessageBox.critical(
-        #     self,
-        #     "数据丢失警告",
-        #     f"当前的琴弦数据文件 ({os.path.basename(current_path)}) 校验失败或数据丢失。\n"
-        #     f"是否使用程序内部静态数据重建一个新的默认文件？",
-        #     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
-        # )
-
-        # if reply == QMessageBox.StandardButton.Yes:
-        #     # 用户选择重建，执行重建
-        #     if self._rebuild_default_string_file():
-        #         self.request_close.emit(True) # 重建成功，允许关闭
-        #     else:
-        #         self.request_close.emit(False) # 重建失败，拒绝关闭
-        # elif reply == QMessageBox.StandardButton.No:
-        #     # 用户选择不重建，也不关闭 (或关闭，根据 UX 设计)
-        #     # 我们选择拒绝关闭，直到用户修正或重建
-        #     #  self.request_close.emit(False)
-        #     QMessageBox.information(self, "操作提醒", "您已选择不重建文件。请手动修改文件或使用 '选择现有文件' 按钮。")
-        #     self.request_close.emit(False) # 拒绝关闭
-        # else:
-        #     # 用户选择 Cancel 或关闭对话框，拒绝本次关闭请求
-        #     self.request_close.emit(False)
         # 2. 校验失败：执行静默恢复流程
         # 尝试恢复到默认路径或重建
         if os.path.exists(self.db_manager.default_file_path) and self._is_file_valid(self.db_manager.default_file_path):
