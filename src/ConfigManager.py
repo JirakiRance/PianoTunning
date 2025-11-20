@@ -55,24 +55,57 @@ class ConfigManager:
     CONFIG_FILE_NAME = 'config.json'
 
     # 定义应用程序的默认配置
-    DEFAULT_CONFIG: Dict[str, Any] = {
-        # 核心物理参数 (全局)
-        'mech_I': 0.0001,      # 转动惯量 I (kg·m²)
-        'mech_r': 0.005,       # 弦轴半径 r (m)
-        'mech_k': 500000.0,    # 弦劲度系数 k (N/m)
-        'mech_Sigma_valid': 2100000, #许用应力 [σ]
-        'mech_Kd': 0.5,        # 施力敏感度 K_D (N·m·s/rad)
+    # DEFAULT_CONFIG: Dict[str, Any] = {
+    #     # 核心物理参数 (全局)
+    #     'mech_I': 0.0001,      # 转动惯量 I (kg·m²)
+    #     'mech_r': 0.005,       # 弦轴半径 r (m)
+    #     'mech_k': 500000.0,    # 弦劲度系数 k (N/m)
+    #     'mech_Sigma_valid': 2100000, #许用应力 [σ]
+    #     'mech_Kd': 0.5,        # 施力敏感度 K_D (N·m·s/rad)
 
-        # 摩擦模型参数 (全局)
+    #     # 摩擦模型参数 (全局)
+    #     'mech_friction_model': "Limit_Friction",
+    #     'mech_fric_limit_0': 0.1, # 初始静摩擦 τ_fric_limit_0
+    #     'mech_alpha': 0.05,       # 静摩擦增长系数 α
+    #     'mech_kinetic': 0.08,     # 动摩擦扭矩 τ_kinetic
+    #     'mech_sigma': 0.001,      # 粘性摩擦系数 σ
+
+    #     # 琴弦数据文件路径
+    #     'db_file_path': None,
+    # }
+    DEFAULT_CONFIG = {
+        # 力学参数
+        'mech_I': 0.0001,
+        'mech_r': 0.005,
+        'mech_k': 500000.0,
+        'mech_Sigma_valid': 210000,
+        'mech_Kd': 0.5,
+
         'mech_friction_model': "Limit_Friction",
-        'mech_fric_limit_0': 0.1, # 初始静摩擦 τ_fric_limit_0
-        'mech_alpha': 0.05,       # 静摩擦增长系数 α
-        'mech_kinetic': 0.08,     # 动摩擦扭矩 τ_kinetic
-        'mech_sigma': 0.001,      # 粘性摩擦系数 σ
+        'mech_fric_limit_0': -10.0,
+        'mech_alpha': 0.05,
+        'mech_kinetic': 0.08,
+        'mech_sigma': 0.001,
 
-        # 琴弦数据文件路径
         'db_file_path': None,
+
+        # 设置菜单（使用枚举的 name 字符串）
+        'settings_auto_prompt_save': True,
+        'settings_save_recording_file': True,
+        'settings_max_recording_time': 10,
+
+        'settings_accidental_type': 'FLAT',     # <-- Enum 名称
+        'settings_pitch_algorithm': 'AUTOCORR', # <-- Enum 名称
+        'settings_standard_a4': 440,
+
+        # 音频系统
+        'audio_sample_rate': 44100,
+        'audio_mode': 'sine',
+        'audio_tone_path': None,
     }
+
+
+
 
     # 静态默认数据（用于文件重建或初始填充）
     STATIC_DEFAULT_STRING_DATA = _generate_full_static_string_data()
@@ -80,8 +113,26 @@ class ConfigManager:
     def __init__(self, config_dir: str):
         self.config_path = os.path.join(config_dir, self.CONFIG_FILE_NAME)
 
+    # def load_config(self) -> Dict[str, Any]:
+    #     """从文件加载配置，如果文件不存在或加载失败，则返回默认配置。"""
+    #     if not os.path.exists(self.config_path):
+    #         print(f"配置文件未找到，使用默认配置: {self.config_path}")
+    #         return self.DEFAULT_CONFIG.copy()
+
+    #     try:
+    #         with open(self.config_path, 'r', encoding='utf-8') as f:
+    #             config = json.load(f)
+
+    #         merged_config = self.DEFAULT_CONFIG.copy()
+    #         merged_config.update(config)
+    #         print(f"配置加载成功: {self.config_path}")
+    #         return merged_config
+
+    #     except Exception as e:
+    #         print(f"加载配置文件失败 ({e})，使用默认配置。")
+    #         return self.DEFAULT_CONFIG.copy()
     def load_config(self) -> Dict[str, Any]:
-        """从文件加载配置，如果文件不存在或加载失败，则返回默认配置。"""
+        """从文件加载配置，如果缺项则补全默认值。"""
         if not os.path.exists(self.config_path):
             print(f"配置文件未找到，使用默认配置: {self.config_path}")
             return self.DEFAULT_CONFIG.copy()
@@ -90,10 +141,11 @@ class ConfigManager:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
-            merged_config = self.DEFAULT_CONFIG.copy()
-            merged_config.update(config)
+            merged = self.DEFAULT_CONFIG.copy()
+            merged.update(config)
+
             print(f"配置加载成功: {self.config_path}")
-            return merged_config
+            return merged
 
         except Exception as e:
             print(f"加载配置文件失败 ({e})，使用默认配置。")

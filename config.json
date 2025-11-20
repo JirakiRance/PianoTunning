@@ -10,5 +10,13 @@
     "mech_kinetic": 0.08,
     "mech_sigma": 0.001,
     "db_file_path": "D:/PianoTunning/PT/data/custom_strings_1.csv",
-    "mech_Siama_valid": 200000.0
+    "settings_auto_prompt_save": false,
+    "settings_save_recording_file": false,
+    "settings_max_recording_time": 10,
+    "settings_accidental_type": "FLAT",
+    "settings_pitch_algorithm": "AUTOCORR",
+    "settings_standard_a4": 440,
+    "audio_sample_rate": 44100,
+    "audio_mode": "sine",
+    "audio_tone_path": null
 }

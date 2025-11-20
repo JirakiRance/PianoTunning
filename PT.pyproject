@@ -16,8 +16,10 @@
         "src/PianoWidget.py",
         "src/PitchDetector.py",
         "src/RightMechanicsPanel.py",
+        "src/SampleRateConfigWidget.py",
         "src/SpectrumWidget.py",
         "src/StringCSVManager.py",
+        "src/ToneLibraryDialog.py",
         "src/TuningDialWidget.py",
         "src/TuningDialWidget2.py",
         "src/TuningInputWidget.py"

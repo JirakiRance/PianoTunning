@@ -39,7 +39,9 @@ except ImportError as e:
     print(f"导入音频模块失败: {e}")
     AUDIO_MODULES_AVAILABLE = False
 
-from AudioEngine import AudioEngine
+from AudioEngine import AudioEngine,FLUIDSYNTH_AVAILABLE
+from ToneLibraryDialog import ToneLibraryDialog
+from SampleRateConfigWidget import SampleRateDialog
 # 频谱绘制模块
 try:
     from SpectrumWidget import SpectrumWidget
@@ -182,14 +184,28 @@ class MainWindow(QMainWindow):
         # 存储分析完需要删除的文件路径
         self.temp_files_to_delete = []
         # 保存分析结果的控制
-        self.settings_auto_prompt_save = True
+        # self.settings_auto_prompt_save = True
+        self.settings_auto_prompt_save = self.config_data.get('settings_auto_prompt_save', True)
         # 默认开启保存录音文件
-        self.settings_save_recording_file = True
+        # self.settings_save_recording_file = True
+        self.settings_save_recording_file = self.config_data.get('settings_save_recording_file', True)
         # 录音时长设置声明
         self.max_recording_time_options = [5, 10, 20] # 选项：5s, 10s, 20s
-        self.settings_max_recording_time = 10         # 默认值 10s
+        # self.settings_max_recording_time = 10         # 默认值 10s
+        self.settings_max_recording_time = self.config_data.get('settings_max_recording_time', 10)
         # 音名系统设置声明,默认使用降号b系统
-        self.settings_accidental_type = AccidentalType.FLAT
+        # self.settings_accidental_type = AccidentalType.FLAT
+        self.settings_accidental_type = AccidentalType[
+            self.config_data.get('settings_accidental_type', 'FLAT')
+        ]
+        # 默认算法
+        #self.settings_pitch_algorithm = PitchDetectionAlgorithm.AUTOCORR
+        self.settings_pitch_algorithm = PitchDetectionAlgorithm[
+            self.config_data.get('settings_pitch_algorithm', 'AUTOCORR')
+        ]
+        # 默认基准音
+        # self.settings_standard_a4 = 440
+        self.settings_standard_a4 = self.config_data.get('settings_standard_a4', 440)
 
         # 2. 声明数据模型和核心模块实例 (在 setup_ui 调用前完成)
         self.audio_detector = None     # 存储 AudioDetector 实例
@@ -260,25 +276,50 @@ class MainWindow(QMainWindow):
         # # ------------------------------------
 
 
+    # def init_audio_engine(self):
+    #     try:
+    #         from AudioEngine import AudioEngine
+
+    #         self.audio_engine = AudioEngine(
+    #             piano_generator=self.piano_generator,
+    #             samplerate=44100,
+    #             blocksize=512
+    #         )
+
+    #         self.audio_engine.set_mode("sine")
+    #         self.update_status("音频引擎初始化成功（合成器模式）")
+
+    #     except Exception as e:
+    #         import traceback
+    #         traceback.print_exc()
+    #         self.update_status(f"音频系统初始化失败：{e}")
+    #         self.audio_engine = None
     def init_audio_engine(self):
+        """初始化发声引擎（合成 + 采样包 + SF2 + SFZ）"""
         try:
-            # 创建 AudioEngine，并把 piano_generator 传进去
+            sr = 44100
+
+            from AudioEngine import AudioEngine
+
             self.audio_engine = AudioEngine(
                 piano_generator=self.piano_generator,
-                samplerate=44100,
+                samplerate=sr,
                 blocksize=512
             )
 
-            # 默认模式 = 合成器（不会要求 sample）
-            self.audio_engine.set_mode("sine")
+            # 把 UI 状态输出函数接进去，AudioEngine 内部遇到警告会调它
+            # self.audio_engine.set_warning_callback(self.update_status)
 
-            self.update_status("音频系统初始化成功（合成器模式）")
+            # 默认合成器模式
+            self.audio_engine.set_mode("sine")
+            self.update_status("音频系统初始化成功（内置合成器模式）")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.update_status(f"音频系统初始化失败：{e}")
             self.audio_engine = None
+
 
     # 初始化音频系统
     def init_audio_system(self):
@@ -731,6 +772,62 @@ class MainWindow(QMainWindow):
         self.accidental_action_group.triggered.connect(self._set_accidental_type)
         # ----------------------------------------------------
 
+        # --- 音色设置子菜单 ---
+        tone_menu = settings_menu.addMenu("音色设置")
+
+        # 打开音色管理窗口
+        self.action_open_tone_manager = QAction("选择音色库", self)
+        self.action_open_tone_manager.triggered.connect(self._open_tone_manager)
+        tone_menu.addAction(self.action_open_tone_manager)
+
+        # 使用 sin 波
+        self.action_use_sine = QAction("使用默认合成器", self, checkable=True)
+        self.action_use_sine.setChecked(True)
+        self.action_use_sine.triggered.connect(self._switch_to_sine)
+        tone_menu.addAction(self.action_use_sine)
+
+        # 采样率
+        action_set_samplerate = QAction("设置采样率", self)
+        action_set_samplerate.triggered.connect(self._open_samplerate_dialog)
+        settings_menu.addAction(action_set_samplerate)
+
+        # --- 音高检测算法选择 ---
+        algo_menu = settings_menu.addMenu("音高检测算法选择")
+
+        self.algo_action_group = QActionGroup(self)
+        self.algo_action_group.setExclusive(True)
+
+        for algo in PitchDetectionAlgorithm:
+            action = QAction(algo.value, self, checkable=True)
+            action.setData(algo)
+
+            if algo == self.settings_pitch_algorithm:
+                action.setChecked(True)
+
+            self.algo_action_group.addAction(action)
+            algo_menu.addAction(action)
+
+        self.algo_action_group.triggered.connect(self._set_pitch_algorithm)
+
+        # --- 基准音 A4 频率设置 ---
+        basefreq_menu = settings_menu.addMenu("标准音 A4 频率（基频）")
+
+        self.basefreq_action_group = QActionGroup(self)
+        self.basefreq_action_group.setExclusive(True)
+
+        basefreq_options = [432, 436, 438, 440, 442, 444]
+        for freq in basefreq_options:
+            action = QAction(f"{freq} Hz", self, checkable=True)
+            action.setData(freq)
+
+            if freq == self.settings_standard_a4:
+                action.setChecked(True)
+
+            self.basefreq_action_group.addAction(action)
+            basefreq_menu.addAction(action)
+
+        self.basefreq_action_group.triggered.connect(self._set_standard_a4)
+
 
         # 添加分隔线，区分不同类别的设置.其上为选择项，其下为直接设置项
         settings_menu.addSeparator()
@@ -748,6 +845,123 @@ class MainWindow(QMainWindow):
         help_menu.addAction("ℹ️ 关于")
 
 
+    def _set_standard_a4(self, action: QAction):
+        """切换 A4 基准频率（例如 440 / 442 / 432 Hz）"""
+        new_freq = action.data()
+
+        if new_freq != self.settings_standard_a4:
+
+            # 1. 更新配置
+            self.settings_standard_a4 = new_freq
+
+            # 2. 更新钢琴系统频率（无需 rebuild，只用已有的 set_base_frequency）
+            if self.piano_generator:
+                try:
+                    self.piano_generator.set_base_frequency(float(new_freq))
+                except Exception as e:
+                    print("PianoGenerator 更新基准频率失败：", e)
+
+            # 3. 刷新 UI
+            if self.piano_generator:
+
+                # --- A. 更新 note_selector ---
+                if hasattr(self, "note_selector"):
+                    self.note_selector.blockSignals(True)
+                    self.note_selector.clear()
+
+                    # 重新填充 88 键的音名
+                    note_names = sorted(
+                        self.piano_generator.export_key_frequencies().keys(),
+                        key=lambda n: self.piano_generator.get_key_by_note_name(n).midi_number
+                    )
+                    self.note_selector.addItems(note_names)
+
+                    # 保持当前选择（比如 A4）
+                    if self.target_key:
+                        self.note_selector.setCurrentText(self.target_key.note_name)
+                        self.set_target_note(self.target_key.note_name)
+
+                    self.note_selector.blockSignals(False)
+
+                # --- B. 刷新钢琴键盘绘图 ---
+                if hasattr(self, "piano_widget"):
+                    self.piano_widget.update()
+
+            # 4. 保存设置
+            # self._save_settings()
+
+            # 5. 状态栏提示
+            self.update_status(f"标准音已切换为 A4 = {new_freq} Hz")
+
+
+    def _set_pitch_algorithm(self, action: QAction):
+        algo = action.data()  # PitchDetectionAlgorithm
+        self.settings_pitch_algorithm = algo
+
+        if self.audio_detector:
+            self.audio_detector.set_pitch_algorithm(algo)
+
+        self.update_status(f"音高检测算法已切换为：{algo.value}")
+
+        # 保存配置
+        # self._save_settings()
+
+    def _open_samplerate_dialog(self):
+        current = getattr(self.audio_engine, "sr", 44100)
+        dlg = SampleRateDialog(current_rate=current, parent=self)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        new_sr = dlg.get_samplerate()
+        try:
+            if hasattr(self.audio_engine, "set_samplerate"):
+                self.audio_engine.set_samplerate(new_sr)
+            else:
+                self.audio_engine.sr = new_sr
+
+            self.update_status(f"采样率已切换到 {new_sr} Hz")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法切换采样率：{e}")
+
+
+    def _open_tone_manager(self):
+        if self.audio_engine is None:
+            QMessageBox.warning(self, "音频未初始化", "音频引擎尚未初始化。")
+            return
+
+        dlg = ToneLibraryDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        mode = dlg.get_selected_mode()
+        samplerate = dlg.get_samplerate()
+
+        try:
+            # 统一先切换采样率
+            self.audio_engine.set_samplerate(samplerate)
+
+            if mode == "sample":
+                folder = dlg.get_sample_folder()
+                self.audio_engine.set_sample_folder(folder)
+                self.audio_engine.set_mode("sample")
+                self.update_status(f"已启用采样音色包：{os.path.basename(folder)}，采样率 {samplerate} Hz")
+
+            elif mode == "sf2":
+                sf2_file = dlg.get_sf2_file()
+                self.audio_engine.load_sf2(sf2_file)
+                self.audio_engine.set_mode("sf2")
+                self.update_status(f"已启用 SF2 音色：{os.path.basename(sf2_file)}，采样率 {samplerate} Hz")
+
+        except Exception as e:
+            QMessageBox.critical(self, "应用音色失败", f"应用音色失败：{e}")
+
+
+    def _switch_to_sine(self):
+        """切换到内置合成器音色"""
+        if self.audio_engine:
+            self.audio_engine.set_mode("sine")
+            self.update_status("已切换到默认合成器音色")
 
     def _open_piano_config_dialog(self):
         """打开钢琴物理参数配置对话框"""
@@ -1004,15 +1218,23 @@ class MainWindow(QMainWindow):
             # 2. 连接 PianoWidget 鼠标点击事件
             self.piano_widget.key_clicked.connect(self.on_note_selector_changed) # 鼠标点击也使用相同的槽函数
 
-        if hasattr(self, "piano_widget"):
-            # 点击钢琴键时播放声音
-            self.piano_widget.key_clicked.connect(
-                lambda note_name: self._play_piano_note(note_name)
-            )
+        # if hasattr(self, "piano_widget"):
+        #     # 点击钢琴键时播放声音
+        #     # self.piano_widget.key_clicked.connect(
+        #     #     lambda note_name: self._play_piano_note(note_name)
+        #     # )
+        #     self.piano_widget.key_clicked.connect(self._play_piano_note)
     def _play_piano_note(self, note_name: str):
-        """钢琴面板点击时发声"""
-        if self.audio_engine:
-            self.audio_engine.play_note(note_name, velocity=1.0, duration=1.2)
+        """点击钢琴键时播放声音"""
+        if not self.audio_engine:
+            self.update_status("音频引擎未初始化，无法播放")
+            print("音频引擎未初始化，无法播放")
+            return
+        try:
+            self.audio_engine.play_note(note_name, velocity=1.0, duration=1.0)
+        except Exception as e:
+            self.update_status(f"播放音色失败: {e}")
+            print(f"播放音色失败: {e}")
 
     def _get_default_recording_path(self) -> str:
         """获取项目默认的录音/分析文件夹路径：工作路径/recordings"""
@@ -1831,6 +2053,7 @@ class MainWindow(QMainWindow):
             self.note_selector.setCurrentText(note_name) # 确保下拉菜单选中
 
         self.set_target_note(note_name)
+        self._play_piano_note(note_name)
 
         # 如果正在录音，需要重新启动实时分析以应用新的 target_frequency
         if self.audio_detector and self.audio_detector.is_recording:
@@ -1850,29 +2073,229 @@ class MainWindow(QMainWindow):
 
 
     # 关闭事件
+    # def closeEvent(self, event):
+    #     """
+    #     在主窗口关闭前执行的事件，用于持久化保存配置到 config.json。
+    #     """
+    #     try:
+    #         # 1. 确保将 StringCSVManager 的当前路径也保存到 config_data 中
+    #         # 这是一个额外的安全网，防止用户在配置窗口外切换了文件。
+    #         if self.db_manager:
+    #             self.config_data['db_file_path'] = self.db_manager.get_connected_path()
+
+    #         # 2. 持久化保存所有配置数据
+    #         success = self.config_manager.save_config(self.config_data)
+
+    #         if success:
+    #             print("程序退出时，配置已成功保存到 config.json。")
+    #         else:
+    #             # 即使保存失败，也应该允许程序退出
+    #             print("程序退出时，配置保存失败。")
+
+    #         # 3. 允许窗口关闭
+    #         event.accept()
+
+    #     except Exception as e:
+    #         print(f"退出时保存配置发生错误: {e}")
+    #         # 即使发生异常，也应该允许程序退出
+    #         event.accept()
     def closeEvent(self, event):
         """
-        在主窗口关闭前执行的事件，用于持久化保存配置到 config.json。
+        重写窗口关闭事件。
+        退出前自动收集所有设置并写入 config.json。
         """
         try:
-            # 1. 确保将 StringCSVManager 的当前路径也保存到 config_data 中
-            # 这是一个额外的安全网，防止用户在配置窗口外切换了文件。
-            if self.db_manager:
-                self.config_data['db_file_path'] = self.db_manager.get_connected_path()
+            # 收集所有当前设置（包括你新增的）
+            new_config = self._collect_all_settings()
 
-            # 2. 持久化保存所有配置数据
-            success = self.config_manager.save_config(self.config_data)
+            # 强制更新 db_file_path（保险）
+            if self.db_manager:
+                new_config['db_file_path'] = self.db_manager.get_connected_path()
+
+            # 保存到 config.json
+            success = self.config_manager.save_config(new_config)
 
             if success:
-                print("程序退出时，配置已成功保存到 config.json。")
+                print("程序退出时，所有设置已成功保存到 config.json。")
             else:
-                # 即使保存失败，也应该允许程序退出
-                print("程序退出时，配置保存失败。")
+                print("程序退出时，配置保存失败（save_config 返回 False）")
 
-            # 3. 允许窗口关闭
             event.accept()
 
         except Exception as e:
             print(f"退出时保存配置发生错误: {e}")
-            # 即使发生异常，也应该允许程序退出
             event.accept()
+
+
+    # def _collect_all_settings(self) -> dict:
+    #     """
+    #     收集 MainWindow 内部所有需要保存的配置项，
+    #     返回一个 dict，用于写入 config.json
+    #     """
+    #     config = {}
+
+    #     # -------------------------
+    #     # A. 力学参数（你已有）
+    #     # -------------------------
+    #     config['mech_I'] = self.mech_I
+    #     config['mech_r'] = self.mech_r
+    #     config['mech_k'] = self.mech_k
+    #     config['mech_Sigma_valid'] = self.mech_Sigma_valid
+    #     config['mech_Kd'] = self.mech_Kd
+
+    #     config['mech_friction_model'] = self.mech_friction_model
+    #     config['mech_fric_limit_0'] = self.mech_fric_limit_0
+    #     config['mech_alpha'] = self.mech_alpha
+    #     config['mech_kinetic'] = self.mech_kinetic
+    #     config['mech_sigma'] = self.mech_sigma
+
+    #     # -------------------------
+    #     # B. CSV 路径
+    #     # -------------------------
+    #     if self.db_manager:
+    #         config['db_file_path'] = self.db_manager.get_connected_path()
+    #     else:
+    #         config['db_file_path'] = None
+
+    #     # -------------------------
+    #     # C. 音名系统设置
+    #     # -------------------------
+    #     config['accidental_type'] = (
+    #         "sharp" if self.settings_accidental_type == AccidentalType.SHARP else "flat"
+    #     )
+
+    #     # -------------------------
+    #     # D. 基准音 A4 设置
+    #     # -------------------------
+    #     config['standard_a4'] = self.settings_standard_a4
+
+    #     # -------------------------
+    #     # E. 音高检测算法
+    #     # -------------------------
+    #     if hasattr(self, "settings_pitch_algorithm"):
+    #         config['pitch_algorithm'] = str(self.settings_pitch_algorithm.name)
+    #     else:
+    #         config['pitch_algorithm'] = "AUTOCORR"
+
+    #     # -------------------------
+    #     # F. 录音保存选项
+    #     # -------------------------
+    #     config['save_recording_file'] = self.settings_save_recording_file
+    #     config['max_recording_time'] = self.settings_max_recording_time
+
+    #     return config
+    # def _collect_all_settings(self) -> Dict[str, Any]:
+    #     """统一收集所有设置项，写入配置系统。"""
+    #     config = {}
+
+    #     # ---------------------------------------------
+    #     # A. 力学参数（mech_）
+    #     # ---------------------------------------------
+    #     config['mech_I'] = self.mech_I
+    #     config['mech_r'] = self.mech_r
+    #     config['mech_k'] = self.mech_k
+    #     config['mech_Sigma_valid'] = self.mech_Sigma_valid
+    #     config['mech_Kd'] = self.mech_Kd
+
+    #     config['mech_friction_model'] = self.mech_friction_model
+    #     config['mech_fric_limit_0'] = self.mech_fric_limit_0
+    #     config['mech_alpha'] = self.mech_alpha
+    #     config['mech_kinetic'] = self.mech_kinetic
+    #     config['mech_sigma'] = self.mech_sigma
+
+    #     # ---------------------------------------------
+    #     # B. CSV 文件路径
+    #     # ---------------------------------------------
+    #     if self.db_manager:
+    #         config['db_file_path'] = self.db_manager.get_connected_path()
+    #     else:
+    #         config['db_file_path'] = None
+
+    #     # ---------------------------------------------
+    #     # C. 设置菜单中的所有选项
+    #     # ---------------------------------------------
+    #     config['settings_auto_prompt_save'] = self.settings_auto_prompt_save
+    #     config['settings_save_recording_file'] = self.settings_save_recording_file
+    #     config['settings_max_recording_time'] = self.settings_max_recording_time
+
+    #     # 音名系统（SHARP/FLAT）
+    #     config['settings_accidental_type'] = self.settings_accidental_type.value
+
+    #     # 音高检测算法（字符串保存）
+    #     config['settings_pitch_algorithm'] = self.settings_pitch_algorithm.value
+
+    #     # A4 基准频率
+    #     config['settings_standard_a4'] = self.settings_standard_a4
+
+    #     # ---------------------------------------------
+    #     # D. 音频相关设置
+    #     # ---------------------------------------------
+    #     if self.audio_engine:
+    #         config['audio_sample_rate'] = self.audio_engine.sr
+    #         config['audio_mode'] = self.audio_engine.mode
+    #         config['audio_tone_path'] = self.audio_engine.loaded_path if hasattr(self.audio_engine, 'loaded_path') else None
+
+    #     return config
+    def _collect_all_settings(self) -> Dict[str, Any]:
+        config = {}
+
+        # -----------------------------
+        # 力学参数
+        # -----------------------------
+        config['mech_I'] = self.mech_I
+        config['mech_r'] = self.mech_r
+        config['mech_k'] = self.mech_k
+        config['mech_Sigma_valid'] = self.mech_Sigma_valid
+        config['mech_Kd'] = self.mech_Kd
+
+        config['mech_friction_model'] = self.mech_friction_model
+        config['mech_fric_limit_0'] = self.mech_fric_limit_0
+        config['mech_alpha'] = self.mech_alpha
+        config['mech_kinetic'] = self.mech_kinetic
+        config['mech_sigma'] = self.mech_sigma
+
+        # -----------------------------
+        # CSV 文件路径
+        # -----------------------------
+        if self.db_manager:
+            config['db_file_path'] = self.db_manager.get_connected_path()
+        else:
+            config['db_file_path'] = None
+
+        # -----------------------------
+        # 设置菜单中的选项
+        # -----------------------------
+        config['settings_auto_prompt_save'] = self.settings_auto_prompt_save
+        config['settings_save_recording_file'] = self.settings_save_recording_file
+        config['settings_max_recording_time'] = self.settings_max_recording_time
+
+        # ---- Enum 需要序列化为字符串 ----
+        config['settings_accidental_type'] = self.settings_accidental_type.name
+        config['settings_pitch_algorithm'] = self.settings_pitch_algorithm.name
+        config['settings_standard_a4'] = self.settings_standard_a4
+
+        # -----------------------------
+        # 音频引擎设置
+        # -----------------------------
+        if self.audio_engine:
+            config['audio_sample_rate'] = self.audio_engine.sr
+            config['audio_mode'] = self.audio_engine.mode
+            config['audio_tone_path'] = getattr(self.audio_engine, "loaded_path", None)
+
+        return config
+
+
+    def _save_settings(self):
+        """
+        将所有当前设置写入 config.json
+        """
+        try:
+            config_dict = self._collect_all_settings()
+            ok = self.config_manager.save_config(config_dict)
+            if ok:
+                self.update_status("设置已保存到 config.json")
+            else:
+                self.update_status("⚠ 设置保存失败，请检查权限")
+        except Exception as e:
+            self.update_status(f"⚠ 保存设置时发生错误：{e}")
+

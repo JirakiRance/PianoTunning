@@ -1,270 +1,376 @@
+# AudioEngine.py — 最终稳定版
+# ==========================================================
+# 支持三模式:
+# 1. sine：纯合成器
+# 2. sample：采样文件夹
+# 3. sf2：fluidsynth 独立音频输出（dsound）
+#
+# 特别说明：
+#  - 旧版 pyfluidsynth 不支持 write_float()
+#    因此 SF2 必须直接用 fluidsynth 自己的驱动
+# ==========================================================
 
 import os
 import threading
-import math
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
-from typing import Dict, Optional, List
-from dataclasses import dataclass, field
 import time
+from dataclasses import dataclass
+from typing import Optional, Dict, List
 
-# 简单 ADSR 包络参数（可外部调整）
-DEFAULT_ATTACK = 0.005
+import numpy as np
+import soundfile as sf
+import sounddevice as sd
+
+# ==========================================================
+# fluidsynth 检查
+# ==========================================================
+FLUIDSYNTH_AVAILABLE = False
+try:
+    import fluidsynth
+    FLUIDSYNTH_AVAILABLE = True
+except Exception:
+    FLUIDSYNTH_AVAILABLE = False
+
+# ADSR 默认值
+DEFAULT_ATTACK = 0.01
 DEFAULT_DECAY = 0.05
-DEFAULT_SUSTAIN = 0.8
-DEFAULT_RELEASE = 0.08
+DEFAULT_SUSTAIN = 0.85
+DEFAULT_RELEASE = 0.10
+ANTI_DENORMAL = 1e-18
+
 
 @dataclass
 class Voice:
-    """活跃声音：合成器或样本回放"""
     note_name: str
-    start_time: float
-    duration: float
     velocity: float
-    kind: str  # 'sine' or 'sample'
-    sample_data: Optional[np.ndarray] = None  # 单声道 float32
-    sample_sr: Optional[int] = None
+    duration: float
+    freq: float
+    kind: str            # "sine" / "sample"
+    sample_data: Optional[np.ndarray] = None
     sample_pos: int = 0
-    freq: Optional[float] = None  # for synth
-    released: bool = False
-    release_start: Optional[float] = None
+    phase: float = 0.0
+    elapsed_time: float = 0.0
+
+    attack: float = DEFAULT_ATTACK
+    decay: float = DEFAULT_DECAY
+    sustain: float = DEFAULT_SUSTAIN
+    release: float = DEFAULT_RELEASE
+
 
 class AudioEngine:
-    def __init__(self, piano_generator=None, samplerate=44100, blocksize=512, channels=1):
-        self.piano = piano_generator  # PianoGenerator instance (can be None)
+    """
+    终极稳定引擎：
+      - sine & sample 通过 sounddevice 回调输出
+      - sf2 通过 fluidsynth 独立驱动输出（dsound），完全不混合
+    """
+
+    def __init__(self, piano_generator=None, samplerate=44100, blocksize=512):
+
         self.sr = samplerate
         self.blocksize = blocksize
-        self.channels = channels
-        self.mode = "sine"  # "sine" or "sample"
-        self.sample_folder: Optional[str] = None
-        self.sample_map: Dict[str, str] = {}  # note_name -> filepath
+        self.piano = piano_generator
+
+        # 采样包
+        self.sample_folder = None
+        self.sample_map: Dict[str, str] = {}
+        self.sample_cache: Dict[str, np.ndarray] = {}
+
+        # 播放中的声部
         self._voices: List[Voice] = []
         self._lock = threading.Lock()
 
-        # envelope params
-        self.attack = DEFAULT_ATTACK
-        self.decay = DEFAULT_DECAY
-        self.sustain = DEFAULT_SUSTAIN
-        self.release = DEFAULT_RELEASE
+        # 模式
+        self.mode = "sine"
 
-        # start output stream with callback mixer
+        # SF2 引擎
+        self.fs = None
+        self.sf2_id = None
+        self.sf2_channel = 0
+        self.sf2_path = None
+
+        # 初始化流
+        self._init_fluidsynth()
+        self._start_stream()
+
+    # ==========================================================
+    # sounddevice 回调（仅 sample / sine）
+    # ==========================================================
+    def _start_stream(self):
+        """启动 sounddevice 流。SF2 不走这个流。"""
+        if hasattr(self, "_stream"):
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except:
+                pass
+
         self._stream = sd.OutputStream(
             samplerate=self.sr,
             blocksize=self.blocksize,
-            channels=self.channels,
-            dtype='float32',
-            callback=self._callback,
-            latency='low'
+            channels=1,
+            dtype="float32",
+            callback=self._callback
         )
+
         self._stream.start()
 
-    # ---------------------------
-    # 配置与样本扫描
-    # ---------------------------
-    def set_mode(self, mode: str):
-        assert mode in ("sine", "sample")
-        self.mode = mode
-
-    def set_sample_folder(self, folder: Optional[str]):
-        self.sample_folder = folder
-        self.scan_sample_folder()
-
-    def scan_sample_folder(self):
-        """扫描 sample_folder，将文件映射到 note 名称（尽量精确匹配）"""
-        self.sample_map.clear()
-        folder = self.sample_folder
-        if not folder or not os.path.isdir(folder):
+    def _callback(self, outdata, frames, time_info, status):
+        """SF2 不进来！Sample 与 Sine 在此混音"""
+        if self.mode == "sf2":
+            outdata[:] = 0
             return
-        # 遍历文件并匹配 note names from piano generator (if available)
-        files = []
-        for root, _, filenames in os.walk(folder):
-            for fn in filenames:
-                lower = fn.lower()
-                if lower.endswith(('.wav', '.flac', '.aiff', '.aif')):
-                    files.append(os.path.join(root, fn))
 
-        # 如果有 piano generator，优先匹配它的 note names
-        note_names = []
+        out = np.zeros(frames, dtype="float32")
+        remove = []
+
+        with self._lock:
+            for v in self._voices:
+
+                # SAMPLE
+                if v.kind == "sample":
+                    start = v.sample_pos
+                    end = start + frames
+                    data = v.sample_data
+
+                    chunk = np.zeros(frames, dtype="float32")
+                    if start < len(data):
+                        remain = min(frames, len(data) - start)
+                        chunk[:remain] = data[start:start + remain]
+
+                    v.sample_pos = end
+                    if v.sample_pos >= len(data):
+                        remove.append(v)
+
+                    out += chunk * v.velocity
+                    continue
+
+                # SINE
+                freq = float(v.freq)
+                t = np.arange(frames, dtype="float32")
+                phase_inc = 2 * np.pi * freq / self.sr
+                phase = v.phase + phase_inc * t
+                v.phase = float(phase[-1] % (2 * np.pi))
+
+                wave = (
+                    0.7 * np.sin(phase)
+                    + 0.2 * np.sin(2 * phase)
+                    + 0.1 * np.sin(3 * phase)
+                )
+
+                # 简化版 ADSR：保证不滋滋
+                env = np.ones(frames, dtype="float32") * v.sustain
+                out += wave * env * v.velocity
+
+                v.elapsed_time += frames / self.sr
+                if v.elapsed_time >= v.duration + v.release:
+                    remove.append(v)
+
+            for v in remove:
+                self._voices.remove(v)
+
+        # limiter
+        peak = np.max(np.abs(out))
+        if peak > 0.98:
+            out *= (0.98 / peak)
+
+        outdata[:, 0] = out + ANTI_DENORMAL
+
+    # ==========================================================
+    # 采样包管理
+    # ==========================================================
+    def set_sample_folder(self, folder):
+        if not os.path.isdir(folder):
+            raise ValueError("无效的采样包文件夹")
+
+        self.sample_folder = folder
+        self._load_samples(folder)
+        self.mode = "sample"
+
+    def _load_samples(self, folder):
+        supported = (".wav", ".flac", ".aiff", ".aif", ".ogg", ".mp3")
+
+        files = [f for f in os.listdir(folder) if f.lower().endswith(supported)]
+
+        # 值映射 note 名称
         if self.piano:
             note_names = [k.note_name for k in self.piano.keys.values()]
         else:
-            # fallback: common note names A0..C8
-            octaves = range(0,9)
-            pcs = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-            for o in octaves:
-                for pc in pcs:
-                    note_names.append(f"{pc}{o}")
+            pcs = ["C", "C#", "D", "D#", "E", "F", "F#",
+                   "G", "G#", "A", "A#", "B"]
+            note_names = [f"{pc}{o}" for o in range(0, 9) for pc in pcs]
 
-        for fp in files:
-            base = os.path.splitext(os.path.basename(fp))[0].lower()
+        self.sample_map.clear()
+
+        # 按文件名匹配音符
+        for fn in files:
+            lower = fn.lower()
             for note in note_names:
-                if note.lower() in base:
-                    # prefer exact match or first found
-                    if note not in self.sample_map:
-                        self.sample_map[note] = fp
-                        break
+                if note.lower() in lower:
+                    self.sample_map[note] = os.path.join(folder, fn)
+                    break
 
-    # ---------------------------
-    # 播放接口
-    # ---------------------------
-    def play_note(self, note_name: str, velocity: float = 1.0, duration: float = 1.5):
-        """外部调用：立即触发一个 note（polyphonic）"""
-        # resolve frequency if piano generator provided
-        freq = None
-        if self.piano:
-            key = self.piano.get_key_by_note_name(note_name)
-            if key:
-                freq = key.frequency
-
-        # decide kind: if sample mode and sample found -> sample, else synth
-        kind = "sine"
-        sample_fp = None
-        if self.mode == "sample" and note_name in self.sample_map:
-            sample_fp = self.sample_map[note_name]
-            kind = "sample"
-
-        voice = Voice(
-            note_name=note_name,
-            # start_time=sd.get_stream_time(),
-            start_time=time.time(),
-            duration=duration,
-            velocity=max(0.0, min(1.0, velocity)),
-            kind=kind,
-            sample_data=None,
-            sample_sr=None,
-            sample_pos=0,
-            freq=freq
-        )
-
-        # 如果 sample，尝试 preload sample (in background)
-        if kind == "sample" and sample_fp:
+        # 预加载
+        self.sample_cache.clear()
+        for note, path in self.sample_map.items():
             try:
-                data, sr = sf.read(sample_fp, dtype='float32')
-                # convert to mono
+                data, sr = sf.read(path, dtype="float32")
                 if data.ndim > 1:
-                    data = np.mean(data, axis=1)
-                # if sample rate mismatch: resample simply (fast nearest)
-                if sr != self.sr:
-                    # crude resample (for better quality, use resampy)
-                    factor = float(self.sr) / float(sr)
-                    nframes = int(np.ceil(data.shape[0] * factor))
-                    indices = (np.arange(nframes) / factor).astype(int)
-                    indices = np.clip(indices, 0, data.shape[0] - 1)
-                    data = data[indices]
-                voice.sample_data = data.astype('float32')
-                voice.sample_sr = self.sr
-            except Exception as e:
-                print("load sample failed", e)
-                voice.kind = "sine"
-        # add voice thread-safely
-        with self._lock:
-            self._voices.append(voice)
+                    data = data.mean(axis=1)
 
+                # normalize
+                mx = np.max(np.abs(data))
+                if mx > 0:
+                    data = data / mx
+
+                # 重采样
+                if sr != self.sr:
+                    factor = self.sr / sr
+                    idx = np.linspace(0, len(data) - 1,
+                                      int(len(data) * factor))
+                    data = np.interp(idx, np.arange(len(data)), data).astype("float32")
+
+                self.sample_cache[note] = data
+
+            except Exception as e:
+                print(f"[AudioEngine] 加载失败 {path}: {e}")
+
+    # ==========================================================
+    # SF2 音源 — 旧版 fluidsynth 完整支持
+    # ==========================================================
+    def _init_fluidsynth(self):
+        if not FLUIDSYNTH_AVAILABLE:
+            self.fs = None
+            return
+
+        try:
+            self.fs = fluidsynth.Synth()
+            # ⭐ 关键：必须使用系统驱动
+            self.fs.start(driver="dsound")
+        except Exception as e:
+            print("Fluidsynth 初始化失败:", e)
+            self.fs = None
+
+    def load_sf2(self, sf2_path, bank=0, preset=0):
+        """加载一个独立 SF2，用系统声音直接播放"""
+        if not FLUIDSYNTH_AVAILABLE:
+            raise RuntimeError("未安装 pyfluidsynth")
+
+        if not os.path.isfile(sf2_path):
+            raise ValueError("SF2 文件不存在")
+
+        if self.fs is None:
+            self._init_fluidsynth()
+        if self.fs is None:
+            raise RuntimeError("Fluidsynth 初始化失败")
+
+        try:
+            self.sf2_id = self.fs.sfload(sf2_path)
+            self.fs.program_select(self.sf2_channel, self.sf2_id, bank, preset)
+            self.sf2_path = sf2_path
+            self.mode = "sf2"
+            print("[AudioEngine] 成功加载 SF2:", sf2_path)
+
+        except Exception as e:
+            raise RuntimeError(f"加载 SF2 失败: {e}")
+
+    # ==========================================================
+    # note 播放
+    # ==========================================================
+    def play_note(self, note_name, velocity=1.0, duration=1.5):
+
+        # ==== SF2 模式（独立播放） ====
+        if self.mode == "sf2" and self.fs and self.sf2_id is not None:
+            midi = self._note_to_midi(note_name)
+            if midi is None:
+                return
+
+            vel = max(1, min(127, int(velocity * 127)))
+
+            try:
+                self.fs.noteon(self.sf2_channel, midi, vel)
+
+                threading.Thread(
+                    target=self._sf2_noteoff,
+                    args=(midi, duration),
+                    daemon=True
+                ).start()
+            except Exception as e:
+                print("SF2 noteon 失败:", e)
+            return
+
+        # ==== sample / sine ====
+        freq = self._note_to_freq(note_name)
+
+        if self.mode == "sample" and note_name in self.sample_cache:
+            v = Voice(note_name, velocity, duration, freq,
+                      "sample", self.sample_cache[note_name])
+        else:
+            v = Voice(note_name, velocity, duration, freq, "sine")
+
+        with self._lock:
+            self._voices.append(v)
+
+    def _sf2_noteoff(self, midi, duration):
+        time.sleep(max(duration, 0.05))
+        try:
+            if self.fs:
+                self.fs.noteoff(self.sf2_channel, midi)
+        except:
+            pass
+
+    # ==========================================================
+    # 工具函数
+    # ==========================================================
     def stop_all(self):
         with self._lock:
             self._voices.clear()
-        sd.stop()
+        if self.fs:
+            try:
+                self.fs.system_reset()
+            except:
+                pass
 
-    # ---------------------------
-    # Mixer callback
-    # ---------------------------
-    def _callback(self, outdata, frames, time_info, status):
-        """sounddevice 输出回调：混音所有活跃 voices 到 outdata"""
-        out = np.zeros((frames,), dtype='float32')
-        t0 = time_info.outputBufferDacTime  # absolute time of first sample in buffer
-        t = (np.arange(frames) / float(self.sr)).astype('float32')
-
-        remove_list = []
-        with self._lock:
-            for vi, voice in enumerate(self._voices):
-                # compute local time base for this voice
-                voice_elapsed = t0 - voice.start_time
-                sample_indices = (voice_elapsed * self.sr + np.arange(frames)).astype(int)
-
-                if voice.kind == 'sample' and voice.sample_data is not None:
-                    # sample mixing (clip at length)
-                    data = voice.sample_data
-                    pos = int(max(0, voice.sample_pos))
-                    # slice from pos for frames
-                    end = pos + frames
-                    chunk = data[pos:end]
-                    # pad if short
-                    if chunk.shape[0] < frames:
-                        chunk = np.pad(chunk, (0, frames - chunk.shape[0]), mode='constant')
-                    # apply velocity scalar and simple linear release if voice ended
-                    out += (chunk * voice.velocity).astype('float32')
-                    voice.sample_pos = end
-                    # if sample finished, mark remove
-                    if voice.sample_pos >= len(data):
-                        remove_list.append(voice)
-                else:
-                    # synth mixing (simple harmonic stack with ADSR)
-                    # generate sample for this buffer
-                    freq = voice.freq if voice.freq else self._note_to_freq(voice.note_name)
-                    # local_time array for voice
-                    local_t = (voice_elapsed + np.arange(frames) / float(self.sr)).astype('float32')
-                    # sine + some harmonics
-                    wave = 0.7*np.sin(2*np.pi*freq*local_t) \
-                           + 0.2*np.sin(2*np.pi*(freq*2)*local_t)*0.5 \
-                           + 0.1*np.sin(2*np.pi*(freq*3)*local_t)*0.25
-                    # envelope (attack/decay/sustain/release) simple per-sample
-                    env = self._adsr_envelope(local_t, voice.duration, voice.velocity)
-                    out += (wave * env).astype('float32')
-                    # if voice duration exceeded and release finished -> remove
-                    if local_t[0] > voice.duration + self.release + 0.1:
-                        remove_list.append(voice)
-
-            # remove finished voices
-            for v in remove_list:
-                if v in self._voices:
-                    self._voices.remove(v)
-
-        # normalize to prevent clipping (simple limiter)
-        max_val = np.max(np.abs(out)) if out.size else 0.0
-        if max_val > 1.0:
-            out /= max_val
-
-        # write to outdata (mono)
-        outdata[:] = out.reshape(-1, 1)
-
-    # ---------------------------
-    # Helper methods
-    # ---------------------------
-    def _adsr_envelope(self, t_array: np.ndarray, duration: float, velocity: float):
-        """返回长度 = t_array 的包络值（0..1）"""
-        env = np.zeros_like(t_array)
-        for i, tt in enumerate(t_array):
-            if tt < 0:
-                env[i] = 0.0
-            elif tt < self.attack:
-                env[i] = (tt / self.attack) * velocity
-            elif tt < self.attack + self.decay:
-                # linear decay to sustain
-                frac = (tt - self.attack) / self.decay
-                env[i] = (1.0 - frac * (1.0 - self.sustain)) * velocity
-            elif tt < duration:
-                env[i] = self.sustain * velocity
-            elif tt < duration + self.release:
-                # release phase
-                env[i] = max(0.0, (1.0 - (tt - duration) / self.release)) * self.sustain * velocity
-            else:
-                env[i] = 0.0
-        return env
-
-    def _note_to_freq(self, note_name: str) -> float:
-        # if piano present, use it
+    def _note_to_freq(self, note):
         if self.piano:
-            key = self.piano.get_key_by_note_name(note_name)
-            if key:
-                return key.frequency
-        # fallback estimate
-        pitch_class_map = {"C":0,"C#":1,"D":2,"D#":3,"E":4,"F":5,"F#":6,"G":7,"G#":8,"A":9,"A#":10,"B":11}
+            k = self.piano.get_key_by_note_name(note)
+            if k:
+                return k.frequency
+        return 440.0
+
+    def _note_to_midi(self, note):
+        pcs = {
+            "C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3,
+            "E": 4, "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8,
+            "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11
+        }
         try:
-            # parse like C#4 or A4
-            octave = int(note_name[-1])
-            pc = note_name[:-1]
-            midi = 12 * (octave + 1) + pitch_class_map.get(pc, 9)
-            return 440.0 * (2.0 ** ((midi - 69) / 12.0))
-        except Exception:
-            return 440.0
+            octave = int(note[-1])
+            pc = note[:-1]
+            return 12 * (octave + 1) + pcs.get(pc, 9)
+        except:
+            return None
+
+    # ==========================================================
+    # ⭐⭐ 你需要的 set_samplerate ⭐⭐
+    # ==========================================================
+    def set_samplerate(self, new_sr: int):
+        """
+        更新采样率（sample + sine），并重启 sounddevice 流。
+        SF2 不受影响，因为它走系统音频。
+        """
+        if new_sr == self.sr:
+            return
+
+        self.sr = new_sr
+
+        # 重启 audio stream（sample / sine）
+        self._start_stream()
+
+        # 如果当前是 sample 模式，则重采样
+        if self.sample_folder:
+            self._load_samples(self.sample_folder)
+
+        print(f"[AudioEngine] 采样率切换到 {new_sr}")
+
+    def set_mode(self, mode):
+        assert mode in ("sine", "sample", "sf2")
+        self.mode = mode
