@@ -20,14 +20,15 @@ project_root=os.path.dirname(current_dir)
 src_path = os.path.join(project_root, 'src')
 sys.path.append(src_path)
 
-from PySide6.QtCore import QFile,QStandardPaths,QDir,QTimer
+from PySide6.QtCore import QFile,QStandardPaths,QDir,QTimer,QUrl
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import  QPushButton, QLabel,QFileDialog,QLineEdit,QProgressBar
 from PySide6.QtWidgets import QSizePolicy,QComboBox,QDial,QSlider
-from PySide6.QtGui import QAction,QActionGroup
+from PySide6.QtGui import QAction,QActionGroup,QDesktopServices
 import numpy as np
 from datetime import datetime
 from typing import Dict,Any
+import math
 
 # 导入音频检测模块
 try:
@@ -42,6 +43,8 @@ except ImportError as e:
 from AudioEngine import AudioEngine,FLUIDSYNTH_AVAILABLE
 from ToneLibraryDialog import ToneLibraryDialog
 from SampleRateConfigWidget import SampleRateDialog
+from UserStatusCard import UserStatusCard,DebugStatusWindow
+from MouseSmoothConfigDialog import MouseSmoothConfigDialog
 # 频谱绘制模块
 try:
     from SpectrumWidget import SpectrumWidget
@@ -64,19 +67,7 @@ try:
 except ImportError as e:
     print(f"导入 PianoWidget 失败: {e}")
 
-# 导入调整面板绘图组件
-# try:
-#     from TuningDialWidget import TuningDialWidget
-#     TUNING_DIAL_AVAILABLE = True
-# except ImportError as e:
-#     print(f"导入 TuningDialWidget 失败: {e}")
-#     TUNING_DIAL_AVAILABLE = False
-# try:
-#     from TuningInputWidget import TuningInputWidget
-#     TUNING_INPUT_WIDGHET_AVAILABLE = True
-# except ImportError as e:
-#     print(f"导入 TuningInputWidget 失败: {e}")
-#     TUNING_INPUT_WIDGHET_AVAILABLE = False
+
 
 # 导入RightMechanicsPanel
 try:
@@ -117,12 +108,7 @@ except ImportError as e:
     print(f"导入 FrictionConfigWidget 失败: {e}")
     FRICTION_CONFIG_WIDGET_AVAILABLE = False
 
-# try:
-#     from MechanicalEngine import MechanicalEngine
-#     MECHANICAL_ENGINE_AVAILABLE = True
-# except ImportError as e:
-#     print(f"导入 MechanicalEngine 失败: {e}")
-#     MECHANICAL_ENGINE_AVAILABLE = False
+
 
 import sys
 import os
@@ -134,6 +120,8 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, QTimer,QObject, Signal
 from PySide6.QtGui import QFont, QPalette, QColor,QIcon
 
+
+HELP_FOLDER = "help"  # 项目里 help 文件夹路径
 
 # ==================== 音高信号类 ====================
 class PitchSignal(QObject):
@@ -163,20 +151,14 @@ class MainWindow(QMainWindow):
         self.mech_alpha = self.config_data.get('mech_alpha', 0.05)          # 静摩擦增长系数 α (N·m/rad)
         self.mech_kinetic = self.config_data.get('mech_kinetic', 0.08)      # 动摩擦扭矩 τ_kinetic (N·m)
         self.mech_sigma = self.config_data.get('mech_sigma', 0.001)         # 粘性摩擦系数 σ (N·m·s/rad)
+        self.mech_gamma = self.config_data.get('mech_gamma',0.9)            # 动静摩擦转化比
         # B. CSV Manager 路径
         self.db_manager = None
         if StringCSVManager:
             initial_db_path = self.config_data.get('db_file_path')
             self.db_manager = StringCSVManager(file_path=initial_db_path)
             print(f"CSV 管理器已初始化，文件路径: {self.db_manager.get_connected_path()}")
-        # ---------------------------
-        # C. MechanicalEngine 实例化 (依赖 A 的参数)
-        # self.mechanical_engine = None
-        # if MECHANICAL_ENGINE_AVAILABLE:
-        #     self.mechanical_engine = MechanicalEngine(dt=1/60)
-        #     # 收集所有全局力学参数并更新引擎
-        #     all_mech_params = {k: getattr(self, k) for k in self.config_data.keys() if k.startswith('mech_')}
-        #     self.mechanical_engine.update_physical_params(all_mech_params)
+
 
         # 1.控件
         # 用于缓存状态消息的静态列表
@@ -207,6 +189,10 @@ class MainWindow(QMainWindow):
         # self.settings_standard_a4 = 440
         self.settings_standard_a4 = self.config_data.get('settings_standard_a4', 440)
 
+        self.tuning_done_threshold_cents = self.config_data.get('tuning_done_threshold_cents',1.0)
+        self.tuning_dial_range_cents = self.config_data.get('tuning_dial_range_cents',100)
+
+
         # 2. 声明数据模型和核心模块实例 (在 setup_ui 调用前完成)
         self.audio_detector = None     # 存储 AudioDetector 实例
         self.pitch_signal = PitchSignal() # 音高信号实例
@@ -215,6 +201,17 @@ class MainWindow(QMainWindow):
         self.default_target_note_name = "A4"
         self.current_analysis_folder: Optional[str] = None  # 新增文件系统属性
         self.audio_engine = None      # 音频生成器
+
+
+
+        # 调试状态窗口（旧版系统状态迁移到这里）
+        # self.debug_status_window = None  # DebugStatusWindow 实例（按需创建）
+        self.debug_status_window = DebugStatusWindow(self)
+
+        # 用户态状态卡片引用（在 create_left_panel 里创建）
+        self.status_card = None
+
+
 
         # 3. 初始化核心系统 (只声明，不进行状态更新)
         # 注意：这里调用 init_audio_system 和 init_piano_system 时，它们内部的 update_status 仍会失败。
@@ -237,6 +234,9 @@ class MainWindow(QMainWindow):
 
         # 6. 最终状态初始化 (在这里统一刷新状态，取代之前分散的 update_status 调用)
         self._post_ui_init_status_update()
+
+        print("status_card 是否创建成功:", hasattr(self, "status_card"), type(self.status_card))
+
 
     # 处理参数文件路径更新
     def _handle_db_config_update(self, new_file_path: str):
@@ -271,6 +271,11 @@ class MainWindow(QMainWindow):
         # 力学引擎
         self.inform_right_params(self.config_data)
 
+        # 初始化 UserStatusCard（用户可见状态卡）
+        # self.status_card.set_input_device(self.audio_detector.input_device)
+        self.status_card.set_mode("实时分析" if self.mode_realtime.isChecked() else "文件分析")
+        self.status_card.set_algorithm(self.audio_detector.get_current_algorithm().value)
+
         # # --- 修正：强制刷新 UI 状态 ---
         QApplication.processEvents() # 强制处理所有挂起的重绘事件
         # # ------------------------------------
@@ -297,7 +302,7 @@ class MainWindow(QMainWindow):
     def init_audio_engine(self):
         """初始化发声引擎（合成 + 采样包 + SF2 + SFZ）"""
         try:
-            sr = 44100
+            sr = self.config_data.get('audio_sample_rate',48000)
 
             from AudioEngine import AudioEngine
 
@@ -498,31 +503,45 @@ class MainWindow(QMainWindow):
         # --- 初始设置默认路径 ---
         self._set_default_analysis_folder()
         # ------------------------
+        # 旧版状态信息，现在已经迁移到视图--调试窗口
+#         # 状态信息
+#         status_group = QGroupBox("系统状态")
+#         status_layout = QVBoxLayout(status_group)
 
-        # 状态信息
+#         self.status_display = QTextEdit()
+#         self.status_display.setMaximumHeight(200)
+#         self.status_display.setPlainText("""📊 当前状态
+# • 模式: 实时分析
+# • 状态: 等待开始
+# • 设备: 默认麦克风
+# • 算法: 自适应
+
+# 💡 调音建议
+# • 准备开始音频检测...
+
+# ⚙️ 参数预览
+# • 目标频率: A4 (440Hz)
+# • 检测算法: 自适应
+# • 灵敏度: 中
+# • 置信度: --""")
+#         self.status_display.setReadOnly(True)
+
+#         status_layout.addWidget(self.status_display)
+#         layout.addWidget(status_group)
+        # 状态信息（新：用户态卡片）
         status_group = QGroupBox("系统状态")
         status_layout = QVBoxLayout(status_group)
 
-        self.status_display = QTextEdit()
-        self.status_display.setMaximumHeight(200)
-        self.status_display.setPlainText("""📊 当前状态
-• 模式: 实时分析
-• 状态: 等待开始
-• 设备: 默认麦克风
-• 算法: 自适应
+        # 创建用户态状态卡片
+        self.status_card = UserStatusCard(self)
 
-💡 调音建议
-• 准备开始音频检测...
+        # 把卡片里的进度条作为全局 progress_bar 使用（兼容原逻辑）
+        self.progress_bar = self.status_card.progress_bar
 
-⚙️ 参数预览
-• 目标频率: A4 (440Hz)
-• 检测算法: 自适应
-• 灵敏度: 中
-• 置信度: --""")
-        self.status_display.setReadOnly(True)
-
-        status_layout.addWidget(self.status_display)
+        status_layout.addWidget(self.status_card)
         layout.addWidget(status_group)
+
+
 
         # 布局管理 - 使用拉伸因子保持固定高度
         layout.addWidget(mode_group)
@@ -640,6 +659,12 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "key_select_widget"):  # 如果你是单独的键选择控件
             self.key_select_widget.setEnabled(False)
+        # 🚫 禁用文件列表
+        if hasattr(self, "file_list_widget"):
+            self.file_list_widget.setEnabled(False)
+        # 目标音高下拉菜单
+        if hasattr(self, "note_selector"):
+            self.note_selector.setEnabled(False)
 
 
     def unlock_adjustment_controls(self):
@@ -654,6 +679,12 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "key_select_widget"):
             self.key_select_widget.setEnabled(True)
+        # 🔓 恢复文件列表
+        if hasattr(self, "file_list_widget"):
+            self.file_list_widget.setEnabled(True)
+        # 目标音高下拉菜单
+        if hasattr(self, "note_selector"):
+            self.note_selector.setEnabled(True)
 
 
 
@@ -683,12 +714,17 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # # 视图菜单
-        # view_menu = menubar.addMenu("👁️ 视图(&V)")
-        # view_menu.addAction("📈 频谱显示选项")
-        # view_menu.addAction("🎹 钢琴窗主题")
-        # view_menu.addAction("🎨 界面主题")
-        # view_menu.addSeparator()
-        # view_menu.addAction("🖥️ 全屏模式")
+
+        # === 视图菜单 ===
+        view_menu = menubar.addMenu("视图(&V)")
+
+        # 显示调试状态窗口（旧版系统状态）
+        self.action_show_debug_status = QAction("显示调试状态窗口", self)
+        self.action_show_debug_status.setCheckable(True)
+        self.action_show_debug_status.setChecked(False)
+        self.action_show_debug_status.triggered.connect(self._toggle_debug_status_window)
+
+        view_menu.addAction(self.action_show_debug_status)
 
 
         # --- 参数菜单 ---
@@ -786,10 +822,6 @@ class MainWindow(QMainWindow):
         self.action_use_sine.triggered.connect(self._switch_to_sine)
         tone_menu.addAction(self.action_use_sine)
 
-        # 采样率
-        action_set_samplerate = QAction("设置采样率", self)
-        action_set_samplerate.triggered.connect(self._open_samplerate_dialog)
-        settings_menu.addAction(action_set_samplerate)
 
         # --- 音高检测算法选择 ---
         algo_menu = settings_menu.addMenu("音高检测算法选择")
@@ -810,7 +842,7 @@ class MainWindow(QMainWindow):
         self.algo_action_group.triggered.connect(self._set_pitch_algorithm)
 
         # --- 基准音 A4 频率设置 ---
-        basefreq_menu = settings_menu.addMenu("标准音 A4 频率（基频）")
+        basefreq_menu = settings_menu.addMenu("标准音 A4 频率")
 
         self.basefreq_action_group = QActionGroup(self)
         self.basefreq_action_group.setExclusive(True)
@@ -828,6 +860,30 @@ class MainWindow(QMainWindow):
 
         self.basefreq_action_group.triggered.connect(self._set_standard_a4)
 
+        # 添加分隔线，区分不同类别的设置.其上为选择项，其下为直接设置项
+        settings_menu.addSeparator()
+
+        # 采样率
+        action_set_samplerate = QAction("设置采样率", self)
+        action_set_samplerate.triggered.connect(self._open_samplerate_dialog)
+        settings_menu.addAction(action_set_samplerate)
+
+        # 鼠标控制平滑设置
+        self.action_mouse_smooth = QAction("鼠标控制平滑设置", self)
+        self.action_mouse_smooth.triggered.connect(self._open_mouse_smooth_dialog)
+        settings_menu.addAction(self.action_mouse_smooth)
+
+        # 调律完成阈值
+        self.action_tune_threshold = QAction("调律完成判定阈值", self)
+        self.action_tune_threshold.triggered.connect(self._open_tune_threshold_dialog)
+        settings_menu.addAction(self.action_tune_threshold)
+
+        self.action_tune_dial_range = QAction("音分表盘范围", self)
+        self.action_tune_dial_range.triggered.connect(self._open_tune_dial_range_dialog)
+        settings_menu.addAction(self.action_tune_dial_range)
+
+
+
 
         # 添加分隔线，区分不同类别的设置.其上为选择项，其下为直接设置项
         settings_menu.addSeparator()
@@ -837,12 +893,121 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.action_toggle_save_prompt)
 
         # 帮助菜单
-        help_menu = menubar.addMenu("❓ 帮助(&H)")
-        help_menu.addAction("📖 用户手册")
-        help_menu.addAction("🔍 算法说明")
-        help_menu.addAction("⌨️ 快捷键列表")
+        # help_menu = menubar.addMenu("帮助(&H)")
+        # help_menu.addAction("软件使用说明")
+        # help_menu.addAction("力学系统说明")
+        # help_menu.addAction("音高检测算法说明")
+        # help_menu.addSeparator()
+        # help_menu.addAction("项目报告")
+        # help_menu.addAction("开题报告")
+        # help_menu.addAction("开题PPT")
+        # help_menu.addSeparator()
+        # help_menu.addAction("关于")
+        help_menu = menubar.addMenu("帮助(&H)")
+
+        act_manual = QAction("软件使用说明", self)
+        act_manual.triggered.connect(lambda: self.open_help_doc("软件使用说明"))
+        help_menu.addAction(act_manual)
+
+        act_mech = QAction("力学系统说明", self)
+        act_mech.triggered.connect(lambda: self.open_help_doc("力学系统说明"))
+        help_menu.addAction(act_mech)
+
+        act_pitch = QAction("音高检测算法说明", self)
+        act_pitch.triggered.connect(lambda: self.open_help_doc("音高检测算法说明"))
+        help_menu.addAction(act_pitch)
+
         help_menu.addSeparator()
-        help_menu.addAction("ℹ️ 关于")
+
+        act_report = QAction("项目报告", self)
+        act_report.triggered.connect(lambda: self.open_help_doc("项目报告"))
+        help_menu.addAction(act_report)
+
+        act_start_report = QAction("开题报告", self)
+        act_start_report.triggered.connect(lambda: self.open_help_doc("开题报告"))
+        help_menu.addAction(act_start_report)
+
+        act_start_ppt = QAction("开题PPT", self)
+        act_start_ppt.triggered.connect(lambda: self.open_help_doc("开题PPT"))
+        help_menu.addAction(act_start_ppt)
+
+        help_menu.addSeparator()
+
+        help_menu.addAction("关于")
+
+
+
+    def _open_tune_dial_range_dialog(self):
+        choices = ["±100 cents", "±50 cents", "±20 cents", "±10 cents"]
+        values = [100, 50, 20, 10]
+
+        # item, ok = QInputDialog.getItem(self, "表盘范围", "选择范围：", choices, 0, False)
+        item, ok = QInputDialog.getItem(self, "表盘范围", "选择范围：", choices, values.index(self.tuning_dial_range_cents), False)
+        if not ok:
+            return
+
+        sel_val = values[choices.index(item)]
+        self.config_data["tuning_dial_range_cents"] = sel_val
+        self.tuning_dial_range_cents = sel_val
+        # self.save_config()
+        self.config_manager.save_config(self.config_data)
+
+        # 更新右侧面板
+        if hasattr(self, "right_panel"):
+            self.right_panel.dial.set_range(sel_val)
+
+        QMessageBox.information(self, "设置成功", f"音分表盘范围已经修改为 ±{sel_val} cents")
+
+    def _open_tune_threshold_dialog(self):
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("调律完成判定阈值")
+        dialog.setLabelText("请输入调律完成阈值（音分）：")
+        dialog.setInputMode(QInputDialog.DoubleInput)
+        dialog.setDoubleValue(self.config_data.get("tuning_done_threshold_cents", 0.5))
+        dialog.setDoubleRange(0.1, 20.0)
+        dialog.setDoubleDecimals(2)
+
+        if dialog.exec() == QDialog.Accepted:
+            value = dialog.doubleValue()
+            self.config_data["tuning_done_threshold_cents"] = value
+            self.tuning_done_threshold_cents=value
+            # self.save_config()
+            self.config_manager.save_config(self.config_data)
+            QMessageBox.information(self, "设置成功", f"调律完成阈值已设置为 {value} cents")
+            self.inform_right_params(self.config_data)
+
+    def _open_mouse_smooth_dialog(self):
+        dlg = MouseSmoothConfigDialog(self.config_data, self)
+        if dlg.exec() == QDialog.Accepted:
+            # 保存设置
+            self.config_data["mouse_deadzone"] = dlg.in_deadzone.value()
+            self.config_data["mouse_alpha"] = dlg.in_alpha.value()
+            self.config_data["mouse_scale"] = dlg.in_scale.value()
+            self.config_data["mouse_decay_tau"] = dlg.in_decay_tau.value()
+
+            # 写回配置文件
+            self.config_manager.save_config(self.config_data)
+
+            # 通知右侧面板
+            self.inform_right_params(self.config_data)
+
+            self.update_status("鼠标控制平滑设置已更新")
+
+
+    def _toggle_debug_status_window(self, checked: bool):
+        """视图菜单：显示/隐藏旧版调试状态窗口"""
+        if self.debug_status_window is None:
+            self.debug_status_window = DebugStatusWindow(self)
+            # 把之前缓存的状态也同步进去
+            for msg in getattr(self, "_status_message_cache", []):
+                self.debug_status_window.apply_status_update_logic(msg)
+
+        if checked:
+            self.debug_status_window.show()
+            self.debug_status_window.raise_()
+            self.debug_status_window.activateWindow()
+        else:
+            self.debug_status_window.hide()
 
 
     def _set_standard_a4(self, action: QAction):
@@ -903,6 +1068,11 @@ class MainWindow(QMainWindow):
 
         self.update_status(f"音高检测算法已切换为：{algo.value}")
 
+        if self.status_card:
+            self.status_card.set_algorithm(algo.value)
+
+
+
         # 保存配置
         # self._save_settings()
 
@@ -930,7 +1100,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "音频未初始化", "音频引擎尚未初始化。")
             return
 
-        dlg = ToneLibraryDialog(self)
+        dlg = ToneLibraryDialog(self,self.audio_engine.sr)
         if dlg.exec() != QDialog.Accepted:
             return
 
@@ -952,9 +1122,11 @@ class MainWindow(QMainWindow):
                 self.audio_engine.load_sf2(sf2_file)
                 self.audio_engine.set_mode("sf2")
                 self.update_status(f"已启用 SF2 音色：{os.path.basename(sf2_file)}，采样率 {samplerate} Hz")
+            self.action_use_sine.setChecked(False)
 
         except Exception as e:
             QMessageBox.critical(self, "应用音色失败", f"应用音色失败：{e}")
+            self.action_use_sine.setChecked(True)
 
 
     def _switch_to_sine(self):
@@ -1034,6 +1206,7 @@ class MainWindow(QMainWindow):
             self.mech_alpha = new_params.get('mech_alpha', self.mech_alpha)
             self.mech_kinetic = new_params.get('mech_kinetic', self.mech_kinetic)
             self.mech_sigma = new_params.get('mech_sigma', self.mech_sigma)
+            self.mech_gamma = new_params.get('mech_gamma',self.mech_gamma)
 
             # 更新 StringCSVManager 的文件路径
             new_db_path = new_params.get('db_file_path')
@@ -1050,9 +1223,6 @@ class MainWindow(QMainWindow):
 
             self.update_status("物理参数已更新并保存。")
 
-            # TODO: 未来需要通知 MechanicalEngine 模块更新这些参数
-            # if self.mechanical_engine:
-            #     self.mechanical_engine.update_parameters(new_params)
 
             self.inform_right_params(new_params)
 
@@ -1085,6 +1255,7 @@ class MainWindow(QMainWindow):
             'mech_alpha': self.mech_alpha,
             'mech_kinetic': self.mech_kinetic,
             'mech_sigma': self.mech_sigma,
+            'mech_gamma': self.mech_gamma
         }
 
         dialog = QDialog(self)
@@ -1268,85 +1439,7 @@ class MainWindow(QMainWindow):
         self.update_file_list(default_folder)
         self.update_status(f"文件分析默认目录已加载：{default_folder}")
 
-    # 为了绘制频谱，这段就注释了
-    # def on_analyse_file_clicked(self):
-    #     """处理文件分析模式下的文件选择和分析"""
-    #     if not self.audio_detector or not self.piano_generator:
-    #         self.update_status("错误：音频或钢琴模块未初始化")
-    #         return
-    #     # 弹出文件选择对话框
-    #     file_dialog = QFileDialog(self, "选择音频文件", os.getcwd(), "音频文件 (*.wav *.mp3 *.flac)")
-    #     if file_dialog.exec():
-    #         file_path = file_dialog.selectedFiles()[0]
-    #         self.update_status(f"开始分析文件: {os.path.basename(file_path)}")
-    #         # 获取当前目标频率
-    #         current_target_freq = self.target_key.frequency if self.target_key else None
-    #         # 执行同步文件分析
-    #         analysis_result = self.audio_detector.analyse_audio_file(
-    #             file_path=file_path,
-    #             target_frequency=current_target_freq
-    #         )
-    #         if analysis_result:
-    #             self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
 
-    #             # --- 关键：文件分析结果可视化 ---
-    #             # 为了绘制频谱，我们需要整个音频文件的FFT，或者在分析时就将分帧数据缓存。
-    #             # 由于 AudioDetector.analyse_audio_file 仅返回统计结果，我们不能直接获得帧数据。
-    #             # 暂时：仅显示最终结果，并提示用户切换到实时模式查看波形。
-
-    #             # TODO: (未来优化) 修改 AudioDetector.analyse_audio_file，让其返回处理后的波形/频谱帧数据列表。
-
-    #             # 临时处理：更新状态和推杆（使用平均偏差）
-    #             mean_cents = np.mean([r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None])
-    #             self._update_slider_display(mean_cents)
-    #         else:
-    #             self.update_status("文件分析失败。")
-    # on_analyse_file_clicked改名为on_start_file_analysis_clicked
-    # def on_analyse_file_clicked(self):
-    #     """
-    #     处理文件分析模式下的文件选择和分析。
-    #     分析完成后，显示整体波形图和平均音分偏差。
-    #     """
-    #     if not self.audio_detector or not self.piano_generator:
-    #         self.update_status("错误：音频或钢琴模块未初始化")
-    #         return
-
-    #     # 弹出文件选择对话框
-    #     file_dialog = QFileDialog(self, "选择音频文件", os.getcwd(), "音频文件 (*.wav *.mp3 *.flac)")
-    #     if file_dialog.exec():
-    #         file_path = file_dialog.selectedFiles()[0]
-    #         self.update_status(f"开始分析文件: {os.path.basename(file_path)}")
-
-    #         # 获取当前目标频率
-    #         current_target_freq = self.target_key.frequency if self.target_key else None
-
-    #         # 执行同步文件分析
-    #         analysis_result = self.audio_detector.analyse_audio_file(
-    #             file_path=file_path,
-    #             target_frequency=current_target_freq
-    #         )
-
-    #         if analysis_result:
-    #             # 1. 更新状态信息
-    #             self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
-
-    #             # 2. 更新推杆显示（使用平均偏差）
-    #             # 排除 None 值后计算平均音分偏差
-    #             cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
-    #             if cents_values:
-    #                 mean_cents = np.mean(cents_values)
-    #                 self._update_slider_display(mean_cents)
-    #             else:
-    #                 self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
-
-    #             # 3. 绘制整体波形图 (文件分析的核心可视化)
-    #             if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
-    #                 # 传入完整的音频数据，并标记为整体图模式 (is_full_file=True)
-    #                 self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
-    #             else:
-    #                 self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
-    #         else:
-    #             self.update_status("文件分析失败。")
 
     def progress_update_callback(self, progress: AnalysisProgress):
         """接收 AudioDetector 发送的进度信息并更新 QProgressBar"""
@@ -1388,6 +1481,10 @@ class MainWindow(QMainWindow):
         self.start_analysis_btn.setEnabled(False) # 禁用开始按钮，防止重复点击
         self.select_folder_btn.setEnabled(False) # 禁用更改目录
         self.mode_realtime.setEnabled(False) # <--- 禁用实时模式按钮
+
+        if self.status_card:
+            self.status_card.set_progress_active(True)
+
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True) # 显示进度条
         self.audio_detector.set_progress_callback(self.progress_update_callback) # 设置进度回调
@@ -1425,15 +1522,39 @@ class MainWindow(QMainWindow):
                 self.update_status(f"文件分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
 
                 # 2. 通知调整面板（使用平均偏差）
-                # 排除 None 值后计算平均音分偏差
-                cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
-                if cents_values:
+
+                # 2. 更新右侧调节面板
+                cents_values = [
+                   r.cents_deviation for r in analysis_result.pitch_results
+                   if r.cents_deviation is not None
+                ]
+                if  cents_values:
                     mean_cents = np.mean(cents_values)
-                    # self._update_slider_display(mean_cents)
                     self.inform_right_current(analysis_result.dominant_frequency)
                 else:
-                    # self._update_slider_display(0.0) # 无有效检测结果，偏差设为0
-                    uuuu=1+2
+                    mean_cents = 0.0
+
+                if  self.status_card:
+
+                    cents = 0.0
+                    if analysis_result.dominant_frequency > 0:
+                        cents = 1200 * math.log2(analysis_result.dominant_frequency / self.target_freq)
+                    # 平均置信度
+                    conf_values = [p.confidence for p in analysis_result.pitch_results]
+                    mean_conf = float(np.mean(conf_values)) if conf_values else 0.0
+
+                    self.status_card.update_realtime(
+                       freq=analysis_result.dominant_frequency,
+                       target_freq=current_target_freq,
+                       # cents=mean_cents,
+                       cents=cents,
+                       confidence=mean_conf
+                    )
+                    self.status_card.set_status_message("文件分析完成")
+
+
+
+
 
                 # 3. 绘制整体波形图 (文件分析的核心可视化)
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
@@ -1453,6 +1574,10 @@ class MainWindow(QMainWindow):
             self.audio_detector.set_progress_callback(None) # 清除回调
             self.progress_bar.setVisible(False) # 隐藏进度条
             self.progress_bar.setValue(0)
+
+            if self.status_card:
+                self.status_card.set_progress_active(False)
+
             self.start_analysis_btn.setEnabled(True) # 恢复开始按钮
             self.select_folder_btn.setEnabled(True) # 恢复更改目录
             self.mode_realtime.setEnabled(True) # <--- 恢复实时模式按钮
@@ -1503,6 +1628,8 @@ class MainWindow(QMainWindow):
             self.record_group.setVisible(True)
             self.file_group.setVisible(False)
             self.update_status("切换到实时分析模式")
+            if self.status_card:
+                self.status_card.set_mode("实时分析")
             # 清除频谱显示
             if hasattr(self, 'spectrum_widget'):
                 self.spectrum_widget.update_frame(np.array([]))
@@ -1510,6 +1637,9 @@ class MainWindow(QMainWindow):
             self.record_group.setVisible(False)
             self.file_group.setVisible(True)
             self.update_status("切换到文件分析模式")
+            if self.status_card:
+                self.status_card.set_mode("文件分析")
+
     # 更新状态信息
     # def update_status(self, message):
     #     """更新状态信息"""
@@ -1654,6 +1784,10 @@ class MainWindow(QMainWindow):
             return
 
         # --- 进度控制开始 ---
+
+        if self.status_card:
+            self.status_card.set_progress_active(True)
+
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True) # 显示进度条
         self.audio_detector.set_progress_callback(self.progress_update_callback) # 设置进度回调
@@ -1674,17 +1808,32 @@ class MainWindow(QMainWindow):
                 # 1. 更新状态信息
                 self.last_analysis_freq = analysis_result.dominant_frequency
                 self.update_status(f"分析完成。主导频率: {analysis_result.dominant_frequency:.1f} Hz")
+                if hasattr(self, "status_card") and self.status_card:
+                    # 当前频率
+                    current_freq = analysis_result.dominant_frequency
+
+                    # 平均音分
+                    cents_vals = [p.cents_deviation for p in analysis_result.pitch_results if p.cents_deviation is not None]
+                    mean_cents = np.mean(cents_vals) if cents_vals else 0.0
+
+                    # 平均置信度
+                    conf_vals = [p.confidence for p in analysis_result.pitch_results]
+                    mean_conf = float(np.mean(conf_vals)) if conf_vals else 0.0
+
+                    # 更新卡片
+                    self.status_card.update_realtime(
+                        freq=current_freq,
+                        target_freq=self.target_key.frequency if self.target_key else None,
+                        cents=mean_cents,
+                        confidence=mean_conf
+                    )
 
                 # 2. 通知调整面板（使用平均偏差）
                 cents_values = [r.cents_deviation for r in analysis_result.pitch_results if r.cents_deviation is not None]
+                mean_cents = float(np.mean(cents_values)) if cents_values else 0.0
                 if cents_values:
                     mean_cents = np.mean(cents_values)
-                    # self._update_slider_display(mean_cents)
                     self.inform_right_current(analysis_result.dominant_frequency)
-
-                else:
-                    # self._update_slider_display(0.0)
-                    uuuu=1+2
 
                 # 3. 绘制整体波形图
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
@@ -1703,6 +1852,11 @@ class MainWindow(QMainWindow):
             self.audio_detector.set_progress_callback(None) # 清除回调
             self.progress_bar.setVisible(False) # 隐藏进度条
             self.progress_bar.setValue(0)
+
+            if self.status_card:
+                self.status_card.set_progress_active(False)
+
+
             # 确保主按钮恢复（已在 on_stop_recording 中处理，但这里再次确认）
             self.start_btn.setEnabled(True)
             # 🔓 分析完成后恢复调节模块
@@ -1746,9 +1900,16 @@ class MainWindow(QMainWindow):
                           f"| 偏差: {cents:+.2f} 音分 "
                           f"| 置信度: {result.confidence:.2f}")
         self.update_status(status_message)
+        # 同步到用户态卡片
+        if self.status_card:
+            self.status_card.update_realtime(
+               freq=result.frequency,
+               target_freq=result.target_frequency,
+               cents=cents,
+               confidence=result.confidence
+            )
 
-        # 3. 更新精密推杆显示 (slider_display)
-        # self._update_slider_display(cents)
+
 
         # 4.  更新频谱波图
         # audio_frame = realtime_data.audio_frame
@@ -1764,53 +1925,7 @@ class MainWindow(QMainWindow):
         else:
             self.piano_widget.set_detected_note(None) # 没有有效检测时取消高亮
 
-    def _update_slider_display(self, cents_deviation: float,theta_degrees:float=0.0):
-        """根据音分偏差更新推杆的颜色和提示文字"""
-        # if TUNING_DIAL_AVAILABLE and hasattr(self, 'tuning_inputwidget_widget'):
-        if TUNING_INPUT_WIDGHET_AVAILABLE and hasattr(self, 'tuning_inputwidget_widget'):
-            # 驱动新的 Dial Widget
-            self.tuning_inputwidget_widget.set_values(cents_deviation, theta_degrees)
-            return
-        # 颜色渐变: ±2 音分绿色 (精确), ±10 音分黄色 (良好), > ±10 音分红色 (不准)
 
-        # 限制偏差在 [-50, 50] 范围内进行可视化，超出也按极限颜色显示
-        cents = np.clip(cents_deviation, -50, 50)
-
-        # 颜色计算（简化版）
-        if abs(cents) <= 2.0:
-            color = "#27ae60" # 绿色 (准确)
-        elif abs(cents) <= 10.0:
-            color = "#f39c12" # 黄色 (良好)
-        else:
-            color = "#e74c3c" # 红色 (不准)
-
-        # 状态文字
-        if cents > 10:
-            status = "高得太多 (需大幅降张力)"
-        elif cents > 2:
-            status = "略高 (需微降张力)"
-        elif cents < -10:
-            status = "低得太多 (需大幅增张力)"
-        elif cents < -2:
-            status = "略低 (需微增张力)"
-        else:
-            status = "完美调准 (±2.0音分)"
-
-        # 目标文本
-        display_text = f"🎚️ 精密推杆调节器\n\n偏差: {cents:+.2f} 音分\n\n状态: {status}"
-
-        # 更新背景颜色 (仅修改推杆部分，不改变整个渐变)
-        style_sheet = f"""
-            background-color: {color};
-            color: white;
-            padding: 120px 20px;
-            border: 2px solid #7f8c8d;
-            border-radius: 10px;
-            font-weight: bold;
-            font-size: 14px;
-        """
-        self.slider_display.setStyleSheet(style_sheet)
-        self.slider_display.setText(display_text)
 
     def update_duration(self):
         """更新录音时长显示"""
@@ -1829,49 +1944,35 @@ class MainWindow(QMainWindow):
 
 
 
-    def update_status(self, message):
-        """更新状态信息 - 改进: 自动替换'状态'行"""
+    def update_status(self, message: str):
+        """更新状态信息：
+        - 用户态卡片：显示一行简短状态
+        - 调试窗口：沿用原来的复杂文本逻辑
+        """
 
-        # 如果 self.status_display 尚未创建，则将消息缓存
-        if not hasattr(self, 'status_display'):
+        # 如果 UI 还没建好，先缓存
+        if not hasattr(self, 'status_card') or self.status_card is None:
             self._status_message_cache.append(message)
             return
 
-        # 如果缓存中有消息，先清空缓存并更新
+        # 先把缓存里的老消息依次应用
         if self._status_message_cache:
             for cached_msg in self._status_message_cache:
                 self._apply_status_update_logic(cached_msg)
             self._status_message_cache.clear()
 
-        # 应用当前消息
+        # 再应用当前消息
         self._apply_status_update_logic(message)
 
-    def _apply_status_update_logic(self, message):
-        """实际更新状态文本框的逻辑"""
-        current_text = self.status_display.toPlainText()
-        lines = current_text.split('\n')
+    def _apply_status_update_logic(self, message: str):
+        """实际更新调试窗口 + 用户态卡片"""
+        # 1. 调试窗口（原版 QTextEdit 行为）
+        if self.debug_status_window is not None:
+            self.debug_status_window.apply_status_update_logic(message)
 
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith('• 状态:'):
-                lines[i] = f"• 状态: {message}"
-                found = True
-                break
-
-        if not found:
-            # 如果没找到，追加到末尾
-            lines.append(f"• 状态: {message}")
-
-        # 只保留 10 行状态信息
-        status_lines = [line for line in lines if not line.strip().startswith('• 状态:') and not line.strip().startswith('💡') and not line.strip().startswith('⚙️')]
-        status_lines.insert(1, f"• 状态: {message}") # 插入新状态
-
-        new_text = '\n'.join(status_lines[:10])
-        self.status_display.setPlainText(new_text)
-
-
-
-
+        # 2. 用户态系统状态卡片（简洁一行）
+        if self.status_card is not None:
+            self.status_card.set_status_message(message)
 
     def _generate_analysis_summary(self,
                                    result: MusicalAnalysisResult,
@@ -1894,6 +1995,7 @@ class MainWindow(QMainWindow):
         cents_values = [p.cents_deviation for p in result.pitch_results if p.cents_deviation is not None]
         confidence_values = [p.confidence for p in result.pitch_results]
         mean_cents = np.mean(cents_values) if cents_values else None
+
 
         # --- 开始生成摘要 ---
         summary = f"--- 钢琴调律分析报告 ---\n"
@@ -2060,6 +2162,9 @@ class MainWindow(QMainWindow):
             self.update_status("正在切换调律目标，准备重启分析...")
             self.on_stop_recording()
             self.on_start_recording()
+        if self.status_card and self.target_key:
+            self.status_card.set_target(self.target_key.note_name, self.target_key.frequency)
+
 
     def highlight_target_key(self):
         """更新 PianoWidget 突出显示目标键"""
@@ -2072,40 +2177,14 @@ class MainWindow(QMainWindow):
                 # self.piano_display.setText(message) # 不要了旧的 Label 更新
 
 
-    # 关闭事件
-    # def closeEvent(self, event):
-    #     """
-    #     在主窗口关闭前执行的事件，用于持久化保存配置到 config.json。
-    #     """
-    #     try:
-    #         # 1. 确保将 StringCSVManager 的当前路径也保存到 config_data 中
-    #         # 这是一个额外的安全网，防止用户在配置窗口外切换了文件。
-    #         if self.db_manager:
-    #             self.config_data['db_file_path'] = self.db_manager.get_connected_path()
 
-    #         # 2. 持久化保存所有配置数据
-    #         success = self.config_manager.save_config(self.config_data)
-
-    #         if success:
-    #             print("程序退出时，配置已成功保存到 config.json。")
-    #         else:
-    #             # 即使保存失败，也应该允许程序退出
-    #             print("程序退出时，配置保存失败。")
-
-    #         # 3. 允许窗口关闭
-    #         event.accept()
-
-    #     except Exception as e:
-    #         print(f"退出时保存配置发生错误: {e}")
-    #         # 即使发生异常，也应该允许程序退出
-    #         event.accept()
     def closeEvent(self, event):
         """
         重写窗口关闭事件。
         退出前自动收集所有设置并写入 config.json。
         """
         try:
-            # 收集所有当前设置（包括你新增的）
+            # 收集所有当前设置
             new_config = self._collect_all_settings()
 
             # 强制更新 db_file_path（保险）
@@ -2127,117 +2206,12 @@ class MainWindow(QMainWindow):
             event.accept()
 
 
-    # def _collect_all_settings(self) -> dict:
-    #     """
-    #     收集 MainWindow 内部所有需要保存的配置项，
-    #     返回一个 dict，用于写入 config.json
-    #     """
-    #     config = {}
 
-    #     # -------------------------
-    #     # A. 力学参数（你已有）
-    #     # -------------------------
-    #     config['mech_I'] = self.mech_I
-    #     config['mech_r'] = self.mech_r
-    #     config['mech_k'] = self.mech_k
-    #     config['mech_Sigma_valid'] = self.mech_Sigma_valid
-    #     config['mech_Kd'] = self.mech_Kd
-
-    #     config['mech_friction_model'] = self.mech_friction_model
-    #     config['mech_fric_limit_0'] = self.mech_fric_limit_0
-    #     config['mech_alpha'] = self.mech_alpha
-    #     config['mech_kinetic'] = self.mech_kinetic
-    #     config['mech_sigma'] = self.mech_sigma
-
-    #     # -------------------------
-    #     # B. CSV 路径
-    #     # -------------------------
-    #     if self.db_manager:
-    #         config['db_file_path'] = self.db_manager.get_connected_path()
-    #     else:
-    #         config['db_file_path'] = None
-
-    #     # -------------------------
-    #     # C. 音名系统设置
-    #     # -------------------------
-    #     config['accidental_type'] = (
-    #         "sharp" if self.settings_accidental_type == AccidentalType.SHARP else "flat"
-    #     )
-
-    #     # -------------------------
-    #     # D. 基准音 A4 设置
-    #     # -------------------------
-    #     config['standard_a4'] = self.settings_standard_a4
-
-    #     # -------------------------
-    #     # E. 音高检测算法
-    #     # -------------------------
-    #     if hasattr(self, "settings_pitch_algorithm"):
-    #         config['pitch_algorithm'] = str(self.settings_pitch_algorithm.name)
-    #     else:
-    #         config['pitch_algorithm'] = "AUTOCORR"
-
-    #     # -------------------------
-    #     # F. 录音保存选项
-    #     # -------------------------
-    #     config['save_recording_file'] = self.settings_save_recording_file
-    #     config['max_recording_time'] = self.settings_max_recording_time
-
-    #     return config
-    # def _collect_all_settings(self) -> Dict[str, Any]:
-    #     """统一收集所有设置项，写入配置系统。"""
-    #     config = {}
-
-    #     # ---------------------------------------------
-    #     # A. 力学参数（mech_）
-    #     # ---------------------------------------------
-    #     config['mech_I'] = self.mech_I
-    #     config['mech_r'] = self.mech_r
-    #     config['mech_k'] = self.mech_k
-    #     config['mech_Sigma_valid'] = self.mech_Sigma_valid
-    #     config['mech_Kd'] = self.mech_Kd
-
-    #     config['mech_friction_model'] = self.mech_friction_model
-    #     config['mech_fric_limit_0'] = self.mech_fric_limit_0
-    #     config['mech_alpha'] = self.mech_alpha
-    #     config['mech_kinetic'] = self.mech_kinetic
-    #     config['mech_sigma'] = self.mech_sigma
-
-    #     # ---------------------------------------------
-    #     # B. CSV 文件路径
-    #     # ---------------------------------------------
-    #     if self.db_manager:
-    #         config['db_file_path'] = self.db_manager.get_connected_path()
-    #     else:
-    #         config['db_file_path'] = None
-
-    #     # ---------------------------------------------
-    #     # C. 设置菜单中的所有选项
-    #     # ---------------------------------------------
-    #     config['settings_auto_prompt_save'] = self.settings_auto_prompt_save
-    #     config['settings_save_recording_file'] = self.settings_save_recording_file
-    #     config['settings_max_recording_time'] = self.settings_max_recording_time
-
-    #     # 音名系统（SHARP/FLAT）
-    #     config['settings_accidental_type'] = self.settings_accidental_type.value
-
-    #     # 音高检测算法（字符串保存）
-    #     config['settings_pitch_algorithm'] = self.settings_pitch_algorithm.value
-
-    #     # A4 基准频率
-    #     config['settings_standard_a4'] = self.settings_standard_a4
-
-    #     # ---------------------------------------------
-    #     # D. 音频相关设置
-    #     # ---------------------------------------------
-    #     if self.audio_engine:
-    #         config['audio_sample_rate'] = self.audio_engine.sr
-    #         config['audio_mode'] = self.audio_engine.mode
-    #         config['audio_tone_path'] = self.audio_engine.loaded_path if hasattr(self.audio_engine, 'loaded_path') else None
-
-    #     return config
     def _collect_all_settings(self) -> Dict[str, Any]:
-        config = {}
+        if self.config_data:
+            config=self.config_data
+        else:
+            config = {}
 
         # -----------------------------
         # 力学参数
@@ -2253,6 +2227,7 @@ class MainWindow(QMainWindow):
         config['mech_alpha'] = self.mech_alpha
         config['mech_kinetic'] = self.mech_kinetic
         config['mech_sigma'] = self.mech_sigma
+        config['mech_gamma'] = self.mech_gamma
 
         # -----------------------------
         # CSV 文件路径
@@ -2268,6 +2243,8 @@ class MainWindow(QMainWindow):
         config['settings_auto_prompt_save'] = self.settings_auto_prompt_save
         config['settings_save_recording_file'] = self.settings_save_recording_file
         config['settings_max_recording_time'] = self.settings_max_recording_time
+        config['tuning_done_threshold_cents'] = self.tuning_done_threshold_cents
+        config['tuning_dial_range_cents'] = self.tuning_dial_range_cents
 
         # ---- Enum 需要序列化为字符串 ----
         config['settings_accidental_type'] = self.settings_accidental_type.name
@@ -2298,4 +2275,37 @@ class MainWindow(QMainWindow):
                 self.update_status("⚠ 设置保存失败，请检查权限")
         except Exception as e:
             self.update_status(f"⚠ 保存设置时发生错误：{e}")
+
+    def open_help_doc(self, base_name: str):
+        """
+        打开帮助文档：
+          - 优先打开同名 .md
+          - 如果没有 .md 则打开 .pdf
+          - 如果两者都没有则弹警告
+        """
+        # 1. 构造路径
+        md_path = os.path.join(HELP_FOLDER, f"{base_name}.md")
+        pdf_path = os.path.join(HELP_FOLDER, f"{base_name}.pdf")
+        doc_path = os.path.join(HELP_FOLDER, f"{base_name}.doc")  # 给开题报告用
+        ppt_path = os.path.join(HELP_FOLDER, f"{base_name}.ppt")  # 给开题PPT用
+
+        # 2. 依次尝试
+        if os.path.exists(md_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(md_path))
+            return
+
+        if os.path.exists(pdf_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
+            return
+
+        if os.path.exists(doc_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(doc_path))
+            return
+
+        if os.path.exists(ppt_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(ppt_path))
+            return
+
+        # 3. 全都没有
+        QMessageBox.warning(self, "文档缺失", f"无法找到帮助文档：{base_name}")
 

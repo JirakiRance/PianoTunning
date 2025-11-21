@@ -24,8 +24,9 @@ SAMPLE_RATES = [22050, 32000, 44100, 48000, 96000]
 
 
 class ToneLibraryDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None,sr:int=48000):
         super().__init__(parent)
+        self.sr=sr
 
         self.setWindowTitle("音色配置（Sample 包 / SF2）")
         self.setMinimumWidth(720)
@@ -34,7 +35,7 @@ class ToneLibraryDialog(QDialog):
         self._selected_mode: str = ""          # "sample" / "sf2"
         self._selected_sample_folder: str = ""
         self._selected_sf2_file: str = ""
-        self._selected_samplerate: int = 44100
+        self._selected_samplerate: int = 48000
 
         self._build_ui()
 
@@ -69,7 +70,7 @@ class ToneLibraryDialog(QDialog):
         self.sr_combo = QComboBox()
         for sr in SAMPLE_RATES:
             self.sr_combo.addItem(str(sr))
-        self.sr_combo.setCurrentText("44100")
+        self.sr_combo.setCurrentText(str(self.sr))
         rate_row.addWidget(self.sr_combo)
         rate_row.addStretch(1)
         layout.addLayout(rate_row)

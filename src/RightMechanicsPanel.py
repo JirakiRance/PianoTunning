@@ -5,7 +5,7 @@ from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal,QElapsedTimer,QTimer
 import math
 from MechanicsEngine import MechanicsEngine
-from TuningDialWidget2 import TuningDialWidget2
+from TuningDialWidget import TuningDialWidget
 from PianoGenerator import PianoKey
 from StringCSVManager import StringCSVManager
 from typing import Dict,Any
@@ -26,6 +26,8 @@ class RightMechanicsPanel(QWidget):
     def __init__(self, parent=None,k_d=50):
         super().__init__(parent)
 
+
+
         # ========== 初始化物理引擎 ==========
         self.mechanics = MechanicsEngine(k_d=k_d)
 
@@ -35,10 +37,13 @@ class RightMechanicsPanel(QWidget):
 
         # 施力模式状态
         self.force_mode = "speed_map"     # 初始模式: 'speed_map' 或 'predefined_force'
-        self.predefined_force = 100      # 预定义力矩 (N·m)
+        self.predefined_force = 200      # 预定义力矩 (N·m)
+
+        self.tune_done_threshold = 1.0
+
 
         # ========== 子部件 ==========
-        self.dial = TuningDialWidget2()
+        self.dial = TuningDialWidget()
         self.dial.set_range(100)
         self.params = ParameterPanel(self)
         self.board = MouseAdjustBoard(self)
@@ -61,26 +66,12 @@ class RightMechanicsPanel(QWidget):
         self.setLayout(layout)
 
 
+
+
     # ===================================================
     # UI 交互槽函数
     # ===================================================
-    # def _on_repair_clicked(self):
-    #     """
-    #     槽函数：一键修复 (校准) 逻辑
-    #     将当前弦轴角度 θ 直接设置为目标频率 F_target 对应的角度 θ_target
-    #     并锁定，即 F_current = F_target，cents = 0。
-    #     """
-    #     # 1. 计算目标频率对应的角度
-    #     theta_target = self.mechanics.calculate_theta_for_frequency(self.target_freq)
 
-    #     # 2. 强制设置 MechanicsEngine 状态
-    #     self.mechanics.reset(theta=theta_target, omega=0.0)
-
-    #     # 3. 强制更新 UI
-    #     self.apply_velocity(0.0)
-
-    #     QMessageBox.information(self, "校准成功",
-    #                             f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.4f} rad)。")
 
     def _on_repair_clicked(self):
         """
@@ -124,7 +115,8 @@ class RightMechanicsPanel(QWidget):
         self.mechanics.reset(theta=theta_target, omega=0.0)
 
         # 5. 强制更新 UI（一次完整更新）
-        self.apply_velocity(0.0)
+        self.apply_velocity(0.0,False)
+
 
         QMessageBox.information(self, "校准成功",
                                 f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.6f} rad)。")
@@ -171,11 +163,11 @@ class RightMechanicsPanel(QWidget):
 
 
         # 强制用新目标频率更新一次 UI
-        self.apply_velocity(0.0) # 使用当前速度(可能为0)驱动一次更新
+        self.apply_velocity(0.0,False) # 使用当前速度(可能为0)驱动一次更新
+
 
     def set_current_frequency(self, freq: float):
         """设置目标频率，供 MainWindow 调用"""
-        # self.apply_velocity(0.0)
 
         # 提前计算theta，必须做！！
         self.mechanics.set_initial_state_by_frequency(freq)
@@ -204,59 +196,39 @@ class RightMechanicsPanel(QWidget):
         self.update()
 
     def set_params(self, new_params: Dict[str, Any]):
-        self.apply_velocity(0.0)
+        self.apply_velocity(0.0,False)
+
         self.mechanics.update( v_user=0.0,dt=0.01)
 
         self.mechanics.update_physical_params(new_params)
 
-        self.apply_velocity(0.0)
+        self.apply_velocity(0.0,False)
+
         self.mechanics.update( v_user=0.0,dt=0.01)
+
+        # 更新鼠标设置
+        if hasattr(self, "board"):
+            self.board.apply_settings(
+                deadzone=new_params.get("mouse_deadzone"),
+                alpha=new_params.get("mouse_alpha"),
+                scale=new_params.get("mouse_scale"),
+                decay_tau=new_params.get("mouse_decay_tau")
+            )
+
+        # 设置音分指示仪的可调范围
+        dial_range = new_params.get("tuning_dial_range_cents")
+        if dial_range:
+            self.dial.set_range(dial_range)
+        # 调律完成阈值
+        if "tuning_done_threshold_cents" in new_params:
+            self.tune_done_threshold = float(new_params["tuning_done_threshold_cents"])
 
         self.update()
 
 
-    # ===================================================
-    #     力学联动逻辑  老版本，只有鼠标速度映射模式
-    # ===================================================
-    # def apply_velocity(self, v_user: float):
-    #     """
-    #     鼠标调整板发出速度输入 v_user（m/s）
-    #     传递给 MechanicsEngine，并实时更新 UI
-    #     """
-    #     state = self.mechanics.update(v_user=v_user, dt=0.01)
-    #     self.current_state = state
 
-    #     freq = state["frequency"]
-    #     tension = state["tension"]
-
-    #     # 计算音分偏差
-    #     cents = 0.0
-    #     if freq > 0:
-    #         cents = 1200 * math.log2(freq / self.target_freq)
-
-    #     # 更新子部件
-    #     self.dial.set_cents(cents)
-
-    #     # 3.1. 修正：更新 TuningDialWidget2 (使用频率和目标频率)
-    #     self.dial.set_frequencies(freq, self.target_freq)
-
-    #     # # 3.2. 更新 ParameterPanel
-    #     # drive_gain = getattr(self.mechanics, 'drive_gain', 5000)
-
-    #     self.params.update_values(
-    #         freq=freq,
-    #         target=self.target_freq,
-    #         cents=cents,
-    #         tension=tension,
-    #         theta=self.mechanics.theta,
-    #         velocity=v_user,
-    #         torque_apply=v_user * self.mechanics.k_d,
-    #         k_d=self.mechanics.k_d
-    #     )
-
-    #     self.update()
     # 新版本，有速度映射和预定义力
-    def apply_velocity(self, v_user: float):
+    def apply_velocity(self, v_user: float,warnings:bool = True):
         """
         鼠标调整板发出速度输入 v_user（m/s）
         根据当前施力模式，将 v_user 转换为 MechanicsEngine 的驱动输入，并实时更新 UI
@@ -286,7 +258,7 @@ class RightMechanicsPanel(QWidget):
         # 1. 执行 MechanicsEngine 更新
         state = self.mechanics.update(v_user=input_v, dt=0.01)
         # ---- 弦松警告（只提示一次） ----
-        if state.get("loose", False):
+        if warnings and state.get("loose", False):
             if not getattr(self, "_warned_loose", False):
                 theta = state["theta"]
                 theta_loose = state["theta_loose_threshold"]
@@ -303,7 +275,7 @@ class RightMechanicsPanel(QWidget):
             self._warned_loose = False
 
         # ---- 断弦警告 ----
-        if state.get("broken", False):
+        if warnings and state.get("broken", False):
             if not getattr(self, "_warned_broken", False):
                 T = state["tension"]
                 Tmax = state["max_tension"]
@@ -350,6 +322,29 @@ class RightMechanicsPanel(QWidget):
         )
 
         self.update()
+
+        # ==============================
+        # 🎯 调律完成检测（最简洁）
+        # ==============================
+        if warnings and abs(cents) <= self.tune_done_threshold:
+            if not getattr(self, "_tune_done_reported", False):
+                self._tune_done_reported = True
+
+                # 停止输入
+                self.board.v_user = 0
+                self.board.v_filtered = 0
+
+                # 力学引擎停止
+                self.mechanics.update(v_user=0, dt=0.01)
+
+                QMessageBox.information(
+                    self, "🎉 调律完成",
+                    f"已达到精度要求：±{self.tune_done_threshold} cents\n"
+                    f"当前偏差：{cents:+.2f} cents"
+                )
+        else:
+            self._tune_done_reported = False
+
 
 
 # ===============================================================
@@ -518,6 +513,10 @@ class MouseAdjustBoard(QFrame):
         else:
             v_est = dy * self.scale / dt
 
+        # # --- 新增：方向反转立即清零 ---
+        # if self.v_filtered != 0 and np.sign(v_est) != np.sign(self.v_filtered):
+        #     self.v_filtered = 0.0
+
         # EMA 平滑
         self.v_filtered = self.alpha * v_est + (1 - self.alpha) * self.v_filtered
         self.v_user = self.v_filtered
@@ -541,6 +540,17 @@ class MouseAdjustBoard(QFrame):
             self.dragging = False
             self.decay_timer.start()
         event.accept()
+
+    def apply_settings(self, deadzone=None, alpha=None, scale=None, decay_tau=None):
+        if deadzone is not None:
+            self.deadzone = float(deadzone)
+        if alpha is not None:
+            self.alpha = float(alpha)
+        if scale is not None:
+            self.scale = float(scale)
+        if decay_tau is not None:
+            self.decay_tau = float(decay_tau)
+
 
     # ===================================================
     # 平滑衰减逻辑（松手后速度逐步回零）

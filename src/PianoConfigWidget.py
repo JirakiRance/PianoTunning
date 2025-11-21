@@ -30,7 +30,7 @@ class PianoConfigWidget(QWidget):
         :param current_params: 包含当前所有力学参数的字典。
         """
         super().__init__(parent)
-        self.setWindowTitle("🎹 钢琴物理参数配置")
+        self.setWindowTitle("钢琴物理参数配置")
         self.current_params = current_params
         self.db_manager = db_manager # 接收 CSV 管理器实例
         self._setup_ui()

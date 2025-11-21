@@ -1,0 +1,218 @@
+E:\Python\python3106\python.exe E:\Ducuments\pycharm\PianoTunning\AudioDetector.py 
+测试开始
+=== 算法比较测试 ===
+测试文件: reference_440.0Hz_20251002_151936.wav
+目标频率: 440.0Hz
+================================================================================
+
+--- 测试算法: pyin_basic ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:  73.9s | 剩余:   0.5s | 算法: pyin_basic  
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.PYIN_BASIC
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 439.7Hz
+稳定性: 1.000
+调音质量: 0.963
+总体置信度: 1.000
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  pyin_basic: 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 75.76s
+  主导频率: 439.7Hz
+  稳定性: 1.000
+  调音质量: 0.963
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 1.000
+  性能统计:
+    - 总处理时间: 73.87s
+    - 平均FPS: 2.1
+    - 处理帧数: 157
+
+--- 测试算法: pyin_enhanced ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:  19.0s | 剩余:   0.1s | 算法: pyin_enhanced
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.PYIN_ENHANCED
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 439.7Hz
+稳定性: 1.000
+调音质量: 0.963
+总体置信度: 1.000
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  pyin_enhanced: 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 19.03s
+  主导频率: 439.7Hz
+  稳定性: 1.000
+  调音质量: 0.963
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 1.000
+  性能统计:
+    - 总处理时间: 19.03s
+    - 平均FPS: 8.3
+    - 处理帧数: 157
+
+--- 测试算法: yin ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:   0.8s | 剩余:   0.0s | 算法: yin         
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.YIN
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 440.3Hz
+稳定性: 1.000
+调音质量: 0.974
+总体置信度: 0.800
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  yin: 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 0.85s
+  主导频率: 440.3Hz
+  稳定性: 1.000
+  调音质量: 0.974
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 0.800
+  性能统计:
+    - 总处理时间: 0.84s
+    - 平均FPS: 187.0
+    - 处理帧数: 157
+
+--- 测试算法: hps ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:   0.1s | 剩余:   0.0s | 算法: hps         
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.HPS
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 145.2Hz
+稳定性: 0.753
+调音质量: 0.032
+总体置信度: 0.896
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  hps: 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 0.08s
+  主导频率: 145.2Hz
+  稳定性: 0.753
+  调音质量: 0.032
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 0.896
+  性能统计:
+    - 总处理时间: 0.07s
+    - 平均FPS: 2138.9
+    - 处理帧数: 157
+
+--- 测试算法: autocorr ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:   1.1s | 剩余:   0.0s | 算法: autocorr    
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.AUTOCORR
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 440.1Hz
+稳定性: 1.000
+调音质量: 0.995
+总体置信度: 0.700
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  autocorr: 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 1.10s
+  主导频率: 440.1Hz
+  稳定性: 1.000
+  调音质量: 0.995
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 0.700
+  性能统计:
+    - 总处理时间: 1.09s
+    - 平均FPS: 143.7
+    - 处理帧数: 157
+
+--- 测试算法: adaptive ---
+开始分析...
+开始分析音频文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+进度: 100.0% | 帧: 157/157 | 已用:  21.3s | 剩余:   0.1s | 算法: adaptive    
+=== 分析结果摘要 ===
+测试算法:PitchDetectionAlgorithm.ADAPTIVE
+文件: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+时长: 2.00秒
+主导频率: 439.7Hz
+稳定性: 1.000
+调音质量: 0.963
+总体置信度: 1.000
+有效帧比例: 1.000
+总检测帧数: 157
+======end======
+算法使用分布:
+  adaptive(pyin_enhanced): 157帧 (100.0%)
+音频文件分析完成: E:\Ducuments\pycharm\PianoTunning\recordings\reference_440.0Hz_20251002_151936.wav
+
+
+✓ 分析完成 - 总耗时: 21.29s
+  主导频率: 439.7Hz
+  稳定性: 1.000
+  调音质量: 0.963
+  检测帧数: 157
+  有效帧比例: 1.000
+  总体置信度: 1.000
+  性能统计:
+    - 总处理时间: 21.28s
+    - 平均FPS: 7.4
+    - 处理帧数: 157
+    - 算法分布:
+      adaptive(pyin_enhanced): 157帧 (100.0%) - 平均135.5ms/帧
+
+================================================================================
+算法性能总结:
+--------------------------------------------------------------------------------
+算法              主导频率       稳定性      质量     总耗时      FPS    置信度     
+--------------------------------------------------------------------------------
+pyin_basic      439.7Hz    1.000    0.963  75.76s   2.1    1.000   
+pyin_enhanced   439.7Hz    1.000    0.963  19.03s   8.3    1.000   
+yin             440.3Hz    1.000    0.974  0.85s    187.0  0.800   
+hps             145.2Hz    0.753    0.032  0.08s    2138.9 0.896   
+autocorr        440.1Hz    1.000    0.995  1.10s    143.7  0.700   
+adaptive        439.7Hz    1.000    0.963  21.29s   7.4    1.000   
+--------------------------------------------------------------------------------
+最佳稳定性: pyin_basic (1.000)
+最佳置信度: pyin_basic (1.000)
+最快算法: hps (0.08s)
+
+进程已结束，退出代码为 0

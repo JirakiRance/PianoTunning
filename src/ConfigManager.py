@@ -54,37 +54,20 @@ class ConfigManager:
     """
     CONFIG_FILE_NAME = 'config.json'
 
-    # 定义应用程序的默认配置
-    # DEFAULT_CONFIG: Dict[str, Any] = {
-    #     # 核心物理参数 (全局)
-    #     'mech_I': 0.0001,      # 转动惯量 I (kg·m²)
-    #     'mech_r': 0.005,       # 弦轴半径 r (m)
-    #     'mech_k': 500000.0,    # 弦劲度系数 k (N/m)
-    #     'mech_Sigma_valid': 2100000, #许用应力 [σ]
-    #     'mech_Kd': 0.5,        # 施力敏感度 K_D (N·m·s/rad)
 
-    #     # 摩擦模型参数 (全局)
-    #     'mech_friction_model': "Limit_Friction",
-    #     'mech_fric_limit_0': 0.1, # 初始静摩擦 τ_fric_limit_0
-    #     'mech_alpha': 0.05,       # 静摩擦增长系数 α
-    #     'mech_kinetic': 0.08,     # 动摩擦扭矩 τ_kinetic
-    #     'mech_sigma': 0.001,      # 粘性摩擦系数 σ
-
-    #     # 琴弦数据文件路径
-    #     'db_file_path': None,
-    # }
     DEFAULT_CONFIG = {
         # 力学参数
-        'mech_I': 0.0001,
-        'mech_r': 0.005,
-        'mech_k': 500000.0,
+        'mech_I': 0.1,
+        'mech_r': 0.02,
+        'mech_k': 20.0,
         'mech_Sigma_valid': 210000,
-        'mech_Kd': 0.5,
+        'mech_Kd': 200,
 
         'mech_friction_model': "Limit_Friction",
         'mech_fric_limit_0': -10.0,
         'mech_alpha': 0.05,
-        'mech_kinetic': 0.08,
+        # 'mech_kinetic': 0.08,
+        'mech_gamma': 0.9,
         'mech_sigma': 0.001,
 
         'db_file_path': None,
@@ -99,9 +82,22 @@ class ConfigManager:
         'settings_standard_a4': 440,
 
         # 音频系统
-        'audio_sample_rate': 44100,
+        'audio_sample_rate': 48000,
         'audio_mode': 'sine',
         'audio_tone_path': None,
+
+        # 鼠标平滑
+        'mouse_deadzone': 0.5,
+        'mouse_alpha': 0.25,
+        'mouse_scale': 0.001,
+        'mouse_decay_tau': 0.02,
+
+        # 调律完成判断阈值（单位：cents）
+        'tuning_done_threshold_cents': 0.5,
+
+        # 调律表盘范围（±多少 cents）
+        'tuning_dial_range_cents': 100,
+
     }
 
 
@@ -113,24 +109,7 @@ class ConfigManager:
     def __init__(self, config_dir: str):
         self.config_path = os.path.join(config_dir, self.CONFIG_FILE_NAME)
 
-    # def load_config(self) -> Dict[str, Any]:
-    #     """从文件加载配置，如果文件不存在或加载失败，则返回默认配置。"""
-    #     if not os.path.exists(self.config_path):
-    #         print(f"配置文件未找到，使用默认配置: {self.config_path}")
-    #         return self.DEFAULT_CONFIG.copy()
 
-    #     try:
-    #         with open(self.config_path, 'r', encoding='utf-8') as f:
-    #             config = json.load(f)
-
-    #         merged_config = self.DEFAULT_CONFIG.copy()
-    #         merged_config.update(config)
-    #         print(f"配置加载成功: {self.config_path}")
-    #         return merged_config
-
-    #     except Exception as e:
-    #         print(f"加载配置文件失败 ({e})，使用默认配置。")
-    #         return self.DEFAULT_CONFIG.copy()
     def load_config(self) -> Dict[str, Any]:
         """从文件加载配置，如果缺项则补全默认值。"""
         if not os.path.exists(self.config_path):

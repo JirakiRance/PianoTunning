@@ -8,10 +8,9 @@
         "src/AudioEngine.py",
         "src/ConfigManager.py",
         "src/FrictionConfigWidget.py",
-        "src/MechanicalEngine.py",
         "src/MechanicsEngine.py",
+        "src/MouseSmoothConfigDialog.py",
         "src/PianoConfigWidget.py",
-        "src/PianoDebugger.py",
         "src/PianoGenerator.py",
         "src/PianoWidget.py",
         "src/PitchDetector.py",
@@ -21,7 +20,6 @@
         "src/StringCSVManager.py",
         "src/ToneLibraryDialog.py",
         "src/TuningDialWidget.py",
-        "src/TuningDialWidget2.py",
-        "src/TuningInputWidget.py"
+        "src/UserStatusCard.py"
     ]
 }
