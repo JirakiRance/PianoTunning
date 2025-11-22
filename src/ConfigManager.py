@@ -2,6 +2,7 @@ import json
 import os
 import numpy as np
 from typing import Dict, Any, List
+import sys
 
 # 标准88键 MIDI 范围
 START_MIDI = 21 # A0
@@ -106,7 +107,20 @@ class ConfigManager:
     # 静态默认数据（用于文件重建或初始填充）
     STATIC_DEFAULT_STRING_DATA = _generate_full_static_string_data()
 
+    # def __init__(self, config_dir: str):
+    #     self.config_path = os.path.join(config_dir, self.CONFIG_FILE_NAME)
     def __init__(self, config_dir: str):
+        # 如果是打包环境，使用用户数据目录
+        if getattr(sys, 'frozen', False):
+            # 打包后使用用户目录
+            if sys.platform == "win32":
+                config_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "PianoTuning")
+            else:
+                config_dir = os.path.join(os.path.expanduser("~"), ".pianotuning")
+
+            # 确保目录存在
+            os.makedirs(config_dir, exist_ok=True)
+
         self.config_path = os.path.join(config_dir, self.CONFIG_FILE_NAME)
 
 

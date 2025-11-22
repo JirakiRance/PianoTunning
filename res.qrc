@@ -1,5 +1,5 @@
 <RCC>
-    <qresource prefix="/image">
-        <file>E:/Resources/images/acgs/NanoAlice01.png</file>
+    <qresource prefix="/">
+        <file>images/NannoAlice01.png</file>
     </qresource>
 </RCC>

@@ -23,12 +23,141 @@ import sounddevice as sd
 # ==========================================================
 # fluidsynth 检查
 # ==========================================================
+# FLUIDSYNTH_AVAILABLE = False
+# try:
+#     import fluidsynth
+#     FLUIDSYNTH_AVAILABLE = True
+# except Exception:
+#     FLUIDSYNTH_AVAILABLE = False
+# ==========================================================
+# fluidsynth 检查 - 详细版本
+# ==========================================================
+# FLUIDSYNTH_AVAILABLE = False
+# FLUIDSYNTH_MODULE = None
+# FLUIDSYNTH_ERROR = None
+
+# try:
+#     # 首先尝试导入 fluidsynth
+#     import fluidsynth
+#     FLUIDSYNTH_MODULE = fluidsynth
+#     print("使用 fluidsynth 包")
+#     print(f"fluidsynth 文件路径: {fluidsynth.__file__}")
+
+#     # 检查版本
+#     version = getattr(fluidsynth, '__version__', '未知')
+#     print(f"fluidsynth 版本: {version}")
+
+#     # 列出所有属性
+#     all_attrs = [attr for attr in dir(fluidsynth) if not attr.startswith('_')]
+#     print(f"fluidsynth 所有公共属性: {all_attrs}")
+
+#     # 检查是否有 Synth 类
+#     if hasattr(fluidsynth, 'Synth'):
+#         print("fluidsynth 模块包含 Synth 类")
+#         try:
+#             # 测试创建 Synth 对象
+#             test_synth = fluidsynth.Synth()
+#             print("fluidsynth.Synth() 创建成功")
+
+#             # 检查 Synth 对象的方法
+#             synth_methods = [method for method in dir(test_synth) if not method.startswith('_')]
+#             print(f"Synth 对象方法数量: {len(synth_methods)}")
+
+#             del test_synth
+#             FLUIDSYNTH_AVAILABLE = True
+#         except Exception as e:
+#             FLUIDSYNTH_ERROR = f"测试创建 Synth 失败: {e}"
+#             print(f"{FLUIDSYNTH_ERROR}")
+#             FLUIDSYNTH_AVAILABLE = False
+#     else:
+#         FLUIDSYNTH_ERROR = "fluidsynth 模块缺少 Synth 类"
+#         print(f"{FLUIDSYNTH_ERROR}")
+#         FLUIDSYNTH_AVAILABLE = False
+
+# except ImportError as e1:
+#     try:
+#         # 如果 fluidsynth 失败，尝试 pyfluidsynth
+#         import pyfluidsynth as fluidsynth
+#         FLUIDSYNTH_MODULE = fluidsynth
+#         print("使用 pyfluidsynth 包")
+#         FLUIDSYNTH_AVAILABLE = True
+#     except ImportError as e2:
+#         FLUIDSYNTH_ERROR = f"两种 fluidsynth 包都不可用: fluidsynth={e1}, pyfluidsynth={e2}"
+#         print(f"{FLUIDSYNTH_ERROR}")
+#         FLUIDSYNTH_AVAILABLE = False
+
+# ==========================================================
+# fluidsynth 检查 - 统一导入逻辑
+# ==========================================================
 FLUIDSYNTH_AVAILABLE = False
-try:
-    import fluidsynth
-    FLUIDSYNTH_AVAILABLE = True
-except Exception:
-    FLUIDSYNTH_AVAILABLE = False
+FLUIDSYNTH_MODULE = None
+FLUIDSYNTH_ERROR = None
+
+def _import_fluidsynth():
+    """统一导入 fluidsynth 的逻辑"""
+    global FLUIDSYNTH_MODULE, FLUIDSYNTH_AVAILABLE, FLUIDSYNTH_ERROR
+
+    packages_to_try = [
+        'fluidsynth',    # 主要包名
+        'pyfluidsynth',  # 备选包名
+    ]
+
+    for pkg_name in packages_to_try:
+        try:
+            if pkg_name == 'fluidsynth':
+                import fluidsynth as fs
+            else:
+                import pyfluidsynth as fs
+
+            FLUIDSYNTH_MODULE = fs
+            print(f"成功导入 {pkg_name}")
+            print(f"  文件路径: {fs.__file__}")
+
+            # 检查版本
+            version = getattr(fs, '__version__', '未知')
+            print(f"  版本: {version}")
+
+            # 检查所有属性
+            all_attrs = [attr for attr in dir(fs) if not attr.startswith('_')]
+            print(f"  属性数量: {len(all_attrs)}")
+
+            return True
+        except ImportError as e:
+            print(f"  导入 {pkg_name} 失败: {e}")
+        except Exception as e:
+            print(f"  导入 {pkg_name} 时出错: {e}")
+
+    FLUIDSYNTH_ERROR = "所有 fluidsynth 包导入都失败"
+    return False
+
+# 执行导入
+if _import_fluidsynth():
+    # 检查是否有 Synth 类
+    if hasattr(FLUIDSYNTH_MODULE, 'Synth'):
+        print("fluidsynth 模块包含 Synth 类")
+        try:
+            # 测试创建 Synth 对象
+            test_synth = FLUIDSYNTH_MODULE.Synth()
+            print("fluidsynth.Synth() 创建成功")
+
+            # 检查 Synth 对象的方法
+            synth_methods = [method for method in dir(test_synth) if not method.startswith('_')]
+            print(f"Synth 对象方法数量: {len(synth_methods)}")
+
+            del test_synth
+            FLUIDSYNTH_AVAILABLE = True
+        except Exception as e:
+            FLUIDSYNTH_ERROR = f"测试创建 Synth 失败: {e}"
+            print(f"{FLUIDSYNTH_ERROR}")
+    else:
+        FLUIDSYNTH_ERROR = "fluidsynth 模块缺少 Synth 类"
+        print(f"{FLUIDSYNTH_ERROR}")
+        # 列出所有可用的属性
+        available_attrs = [attr for attr in dir(FLUIDSYNTH_MODULE) if not attr.startswith('_')]
+        print(f"可用属性: {available_attrs}")
+else:
+    print(f"{FLUIDSYNTH_ERROR}")
+
 
 # ADSR 默认值
 DEFAULT_ATTACK = 0.01
@@ -236,18 +365,73 @@ class AudioEngine:
     # ==========================================================
     # SF2 音源 — 旧版 fluidsynth 完整支持
     # ==========================================================
+    # def _init_fluidsynth(self):
+    #     if not FLUIDSYNTH_AVAILABLE:
+    #         self.fs = None
+    #         return
+
+    #     try:
+    #         self.fs = fluidsynth.Synth()
+    #         # ⭐ 关键：必须使用系统驱动
+    #         self.fs.start(driver="dsound")
+    #     except Exception as e:
+    #         print("Fluidsynth 初始化失败:", e)
+    #         self.fs = None
+    # def _init_fluidsynth(self):
+
+    #     if not FLUIDSYNTH_AVAILABLE:
+    #         self.fs = None
+    #         print(f"Fluidsynth不可用")
+    #         return
+
+    #     try:
+    #         print("正在初始化 Fluidsynth...")
+    #         # self.fs = fluidsynth.Synth()
+    #         self.fs =FLUIDSYNTH_MODULE.Synth()
+    #         print("Fluidsynth Synth 对象创建成功")
+
+    #         # 尝试启动音频驱动
+    #         print("正在启动 Fluidsynth 音频驱动...")
+    #         self.fs.start(driver="dsound")
+    #         print("Fluidsynth 音频驱动启动成功")
+
+    #     except Exception as e:
+    #         error_msg = f"Fluidsynth 初始化失败: {e}"
+    #         print(error_msg)
+    #         self.fs = None
     def _init_fluidsynth(self):
+
         if not FLUIDSYNTH_AVAILABLE:
             self.fs = None
             return
 
-        try:
-            self.fs = fluidsynth.Synth()
-            # ⭐ 关键：必须使用系统驱动
-            self.fs.start(driver="dsound")
-        except Exception as e:
-            print("Fluidsynth 初始化失败:", e)
-            self.fs = None
+        print("正在初始化 Fluidsynth...")
+        self.fs = FLUIDSYNTH_MODULE.Synth()
+
+        # --- 防止 MIDI/SDL 自动检测 ---
+        self.fs.setting("midi.autoconnect", 0)
+        self.fs.setting("midi.player", 0)
+        self.fs.setting("synth.lock-memory", 0)
+
+        # --- 强制音频输出 ---
+        preferred_drivers = ["dsound", "wasapi", "portaudio"]
+
+        for drv in preferred_drivers:
+            try:
+                print(f"尝试驱动: {drv}")
+                self.fs.start(driver=drv)
+                print(f"Fluidsynth 音频驱动启动成功: {drv}")
+                break
+            except Exception as e:
+                print(f"驱动 {drv} 启动失败: {e}")
+        else:
+            print("没有可用音频驱动，使用 dummy 输出")
+            self.fs.start(driver="file")  # fallback
+
+        print("Fluidsynth 初始化完成")
+
+
+
 
     def load_sf2(self, sf2_path, bank=0, preset=0):
         """加载一个独立 SF2，用系统声音直接播放"""

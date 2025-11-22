@@ -10,6 +10,29 @@ import csv
 import sys
 import subprocess # 用来打开excel
 
+
+
+# 在文件开头添加打包环境检测函数
+def get_app_data_dir():
+    """获取应用数据目录，适配打包环境"""
+    if getattr(sys, 'frozen', False):
+        # 打包环境
+        if sys.platform == "win32":
+            base_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "PianoTuning")
+        elif sys.platform == "darwin":
+            base_dir = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "PianoTuning")
+        else:
+            base_dir = os.path.join(os.path.expanduser("~"), ".pianotuning")
+
+        # 创建目录
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+    else:
+        # 开发环境使用当前目录
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+
 # 导入数据管理类(csv，先不做mysql)
 try:
     from StringCSVManager import StringCSVManager
@@ -369,6 +392,10 @@ class PianoConfigWidget(QWidget):
             QMessageBox.warning(self, "文件不存在", "当前数据文件不存在，请先 '新建' 或 '选择现有文件'。")
             return
         try:
+            # 在打包环境中确保使用绝对路径
+            if getattr(sys, 'frozen', False):
+                current_path = os.path.abspath(current_path)
+
             # 启动外部程序打开文件
             if sys.platform == "win32":
                 # Windows 使用 os.startfile

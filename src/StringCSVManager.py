@@ -2,6 +2,30 @@ import csv
 import os
 from typing import List, Dict, Any, Optional
 import numpy as np
+import sys,os
+
+
+# 修改：添加打包环境检测函数
+def get_app_data_dir():
+    """获取应用数据目录，适配打包环境"""
+    if getattr(sys, 'frozen', False):
+        # 打包环境
+        if sys.platform == "win32":
+            base_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "PianoTuning")
+        elif sys.platform == "darwin":
+            base_dir = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "PianoTuning")
+        else:
+            base_dir = os.path.join(os.path.expanduser("~"), ".pianotuning")
+
+        # 创建目录
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+    else:
+        # 开发环境使用当前目录
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+
 
 # 默认数据文件位于项目根目录下的 data/strings_default.csv
 DATA_DIR = 'data'
@@ -9,47 +33,6 @@ DEFAULT_FILE_NAME = 'strings_default.csv'
 
 from ConfigManager import ConfigManager
 
-# 现在这个功能移交给ConfigManager
-# # --- 完整的 88 键静态默认数据 ---
-# def _generate_full_static_data():
-#     """生成完整的 88 键 L 和 μ 静态数据"""
-#     data = []
-
-#     # MIDI 编号范围：A0 (21) 到 C8 (108)
-#     start_midi = 21
-#     end_midi = 108
-
-#     # 模拟长度和密度梯度 (使用对数或线性平滑模拟真实钢琴的渐变)
-#     # 长度从 1.5m 线性递减到 0.008m
-#     lengths = np.linspace(1.5, 0.008, end_midi - start_midi + 1)
-#     # 密度从 0.015 kg/m 模拟对数递减到 0.000004 kg/m
-#     densities = np.logspace(np.log10(0.015), np.log10(0.000004), end_midi - start_midi + 1)
-
-#     # 标准升号音名表 (从 A0 开始)
-#     note_names_sharp = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"]
-
-#     for i, midi in enumerate(range(start_midi, end_midi + 1)):
-#         key_id = midi - start_midi
-#         octave = (midi // 12) - 1 # 得到八度数
-#         if midi == 21: octave = 0 # 修正 A0 的八度
-#         if midi == 22: octave = 0 # 修正 A#0 的八度
-#         if midi == 23: octave = 0 # 修正 B0 的八度
-#         if midi == 108: octave = 8 # 修正 C8 的八度
-
-#         note_base = note_names_sharp[(midi - 21) % 12]
-#         note_name = f"{note_base}{octave}"
-
-#         data.append({
-#             'key_id': key_id,
-#             'note_name': note_name.replace('A#00', 'A#0').replace('A00', 'A0').replace('B00', 'B0'), # 修正 A0/A#0/B0 的八度显示
-#             'length': float(f"{lengths[i]:.4f}"),
-#             'density': float(f"{densities[i]:.8f}")
-#         })
-
-#     return data
-
-# STATIC_DEFAULT_STRING_DATA = _generate_full_static_data()
-# ----------------------------------------------------
 
 
 class StringCSVManager:
@@ -63,16 +46,28 @@ class StringCSVManager:
         self.file_path = file_path or self.default_file_path
         self._initialize_file()
 
+    # 别删，这个是旧版，不打包时用的
+    # def _resolve_default_path(self) -> str:
+    #     """解析默认的项目根目录下的 data/strings.csv 路径"""
+    #     current_dir = os.path.dirname(os.path.abspath(__file__))
+    #     project_root = os.path.dirname(current_dir)
+    #     data_dir = os.path.join(project_root, DATA_DIR)
+
+    #     if not os.path.exists(data_dir):
+    #         os.makedirs(data_dir, exist_ok=True)
+
+    #     return os.path.join(data_dir, DEFAULT_FILE_NAME)
     def _resolve_default_path(self) -> str:
-        """解析默认的项目根目录下的 data/strings.csv 路径"""
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        data_dir = os.path.join(project_root, DATA_DIR)
+        """解析默认路径 - 适配打包环境"""
+        # 修改：使用统一的应用程序数据目录
+        app_data_dir = get_app_data_dir()
+        data_dir = os.path.join(app_data_dir, DATA_DIR)
 
         if not os.path.exists(data_dir):
             os.makedirs(data_dir, exist_ok=True)
 
         return os.path.join(data_dir, DEFAULT_FILE_NAME)
+
 
     def get_connected_path(self) -> str:
             """返回当前连接的文件路径 (绝对路径)"""

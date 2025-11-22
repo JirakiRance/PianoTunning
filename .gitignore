@@ -72,3 +72,11 @@ CMakeLists.txt.user*
 *.dll
 *.exe
 
+# === Project-specific ignores ===
+recordings/
+soundsource/
+build/
+dist/
+venv/
+
+

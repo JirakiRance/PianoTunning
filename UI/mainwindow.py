@@ -14,11 +14,28 @@ from ui_form import Ui_MainWindow
 # 以上为qt系统生成
 
 import os
+
+# ----------------------------
+# 资源定位函数（PyInstaller 必须）
+# ----------------------------
+def resource_path(relative_path: str):
+    """
+    在开发环境与 PyInstaller 打包后返回正确的资源路径
+    """
+    if hasattr(sys, "_MEIPASS"):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
 # 添加src文件夹到Python路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root=os.path.dirname(current_dir)
-src_path = os.path.join(project_root, 'src')
+# src_path = os.path.join(project_root, 'src')
+# sys.path.append(src_path)
+src_path = resource_path("src")  # 修改：使用资源路径
 sys.path.append(src_path)
+
 
 from PySide6.QtCore import QFile,QStandardPaths,QDir,QTimer,QUrl
 from PySide6.QtUiTools import QUiLoader
@@ -357,12 +374,13 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """设置主界面"""
         self.setWindowTitle("千椻")
-        self.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
+        #self.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
+        self.setWindowIcon(QIcon(":/images/NannoAlice01.png"))
         self.setGeometry(100, 100, 1400, 900)
         # 设置系统托盘图标
         if QSystemTrayIcon.isSystemTrayAvailable():
             print("系统支持托盘图标")
-            self.tray_icon = QSystemTrayIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"), self)
+            self.tray_icon = QSystemTrayIcon(QIcon(":/images/NannoAlice01.png"), self)
             self.tray_icon.show()
             print("托盘图标已显示")
         else:
