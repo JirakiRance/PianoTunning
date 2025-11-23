@@ -16,7 +16,7 @@
     "settings_accidental_type": "FLAT",
     "settings_pitch_algorithm": "AUTOCORR",
     "settings_standard_a4": 440,
-    "audio_sample_rate": 48000,
+    "audio_sample_rate": 44100,
     "audio_mode": "sine",
     "audio_tone_path": null,
     "mouse_deadzone": 0.5,

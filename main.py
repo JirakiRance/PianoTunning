@@ -137,6 +137,6 @@ if __name__ == "__main__":
     app.setWindowIcon(QIcon(icon_path))
     app.setApplicationVersion("1.0.0")
     window = MainWindow()
-    window.resize(1400,700)
+    window.resize(1400,750)
     window.show()
     sys.exit(app.exec())

@@ -14,6 +14,7 @@
         "src/PianoGenerator.py",
         "src/PianoWidget.py",
         "src/PitchDetector.py",
+        "src/RandomTuningDialog.py",
         "src/RightMechanicsPanel.py",
         "src/SampleRateConfigWidget.py",
         "src/SpectrumWidget.py",

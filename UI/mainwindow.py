@@ -742,7 +742,12 @@ class MainWindow(QMainWindow):
         self.action_show_debug_status.setChecked(False)
         self.action_show_debug_status.triggered.connect(self._toggle_debug_status_window)
 
+        # 随机调音子窗口
+        self.actionRandomTuning = QAction("随机调音子窗口",self)
+        self.actionRandomTuning.triggered.connect(self.open_random_tuning)
+
         view_menu.addAction(self.action_show_debug_status)
+        view_menu.addAction(self.actionRandomTuning)
 
 
         # --- 参数菜单 ---
@@ -953,6 +958,12 @@ class MainWindow(QMainWindow):
 
         help_menu.addAction("关于")
 
+
+    def open_random_tuning(self):
+        from RandomTuningDialog import RandomTuningDialog
+        dlg = RandomTuningDialog(self.piano_generator, self.audio_engine, self)
+        dlg.setModal(False)          # 非模态，方便一边练一边看主界面
+        dlg.show()
 
 
     def _open_tune_dial_range_dialog(self):
