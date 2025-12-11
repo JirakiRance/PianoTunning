@@ -22,7 +22,7 @@ class RightMechanicsPanel(QWidget):
         [ParameterPanel] —— 当前频率、张力、音分偏差
         [MouseAdjustBoard] —— 鼠标输入控制 v_user = dD/dt
     """
-
+    inform_mainwindow_params =Signal(dict)
     def __init__(self, parent=None,k_d=50):
         super().__init__(parent)
 
@@ -64,6 +64,7 @@ class RightMechanicsPanel(QWidget):
         layout.addWidget(self.button_panel,0.1)
         layout.addWidget(self.board,2)
         self.setLayout(layout)
+        self.setMinimumWidth(250)
 
 
 
@@ -82,54 +83,88 @@ class RightMechanicsPanel(QWidget):
           若阈值无意义（参数不允许松弦），直接设置目标角度。
         - 重置 omega = 0，刷新 UI
         """
-        # 1. 计算目标频率对应的角度（使用修正后的 calculate_theta_for_frequency）
-        theta_target = self.mechanics.calculate_theta_for_frequency(self.target_freq)
+        try:
+            # 1. 计算目标频率对应的角度（使用修正后的 calculate_theta_for_frequency）
+            theta_target = self.mechanics.calculate_theta_for_frequency(self.target_freq)
 
-        # 2. 计算静态松弦阈值（如果你的 MechanicsEngine 有类似方法）
-        #    如果没有该方法，请参考 MechanicsEngine._compute_theta_loose_threshold 的实现并加上
-        theta_loose = None
-        # 尝试调用（如果你已按之前建议添加了 _compute_theta_loose_threshold）
-        if hasattr(self.mechanics, "_compute_theta_loose_threshold"):
-            theta_loose = self.mechanics._compute_theta_loose_threshold()
+            # 1.5、 计算修复时间（使用预定义力矩）
+            repair_time = self.mechanics.calculate_repair_time(
+                target_theta=theta_target,
+                max_torque=self.predefined_force
+            )
 
-        # 3. 如果阈值存在且目标在阈值以下，提示用户并自动补偿到阈值上（微小余量）
-        if theta_loose is not None:
-            if theta_target < theta_loose:
-                # 弹出提示，说明原因并将目标调整为阈值+余量
-                reply = QMessageBox.question(
-                    self, "松弦预警：目标角度低于松弦阈值",
-                    ("目标角度对应的 θ 低于静态松弦阈值，"
-                     "直接设置会导致螺丝未吃入摩擦区（松弦），修复后无法保持。\n\n"
-                     f"目标 θ = {theta_target:.6f} rad\n"
-                     f"松弦阈值 θ_loose = {theta_loose:.6f} rad\n\n"
-                     "是否将修复角度自动提升到阈值以保证稳定？\n"
-                     "（选择 否=仍设为目标θ，可能会被判为松弦）"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
+            # 2. 计算静态松弦阈值（如果你的 MechanicsEngine 有类似方法）
+            #    如果没有该方法，请参考 MechanicsEngine._compute_theta_loose_threshold 的实现并加上
+            theta_loose = None
+            # 尝试调用（如果你已按之前建议添加了 _compute_theta_loose_threshold）
+            if hasattr(self.mechanics, "_compute_theta_loose_threshold"):
+                theta_loose = self.mechanics._compute_theta_loose_threshold()
+
+            # 3. 如果阈值存在且目标在阈值以下，提示用户并自动补偿到阈值上（微小余量）
+            if theta_loose is not None:
+                if theta_target < theta_loose:
+                    # 弹出提示，说明原因并将目标调整为阈值+余量
+                    reply = QMessageBox.question(
+                        self, "松弦预警：目标角度低于松弦阈值",
+                        ("目标角度对应的 θ 低于静态松弦阈值，"
+                         "直接设置会导致螺丝未吃入摩擦区（松弦），修复后无法保持。\n\n"
+                         f"目标 θ = {theta_target:.6f} rad\n"
+                         f"松弦阈值 θ_loose = {theta_loose:.6f} rad\n\n"
+                         "是否将修复角度自动提升到阈值以保证稳定？\n"
+                         "（选择 否=仍设为目标θ，可能会被判为松弦）"),
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # 加入微小余量，避免数值边界问题
+                        theta_target = theta_loose + max(1e-6, theta_loose * 1e-3)
+                    # 如果用户选择 No，则保持原目标 theta_target（但可能马上被判为松弦）
+            # 4. 强制设置 MechanicsEngine 状态
+            self.mechanics.reset(theta=theta_target, omega=0.0)
+
+            # 5. 强制更新 UI（一次完整更新）
+            self.apply_velocity(0.0,False)
+
+            # 6. 显示修复成功信息，包含修复时间
+            time_info = ""
+            if repair_time >= self.mechanics.max_repair_time:  # 如果接近最大模拟时间
+               time_info = f"\n\n⏱ 预估修复时间：> {repair_time:.1f} 秒（可能未完全收敛）"
+            else:
+               time_info = f"\n\n⏱ 预估修复时间：{repair_time:.2f} 秒"
+
+
+            # QMessageBox.information(self, "校准成功",
+            #                         f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.6f} rad)。")
+            QMessageBox.information(
+                        self,
+                        "校准成功",
+                        f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.6f} rad)。"
+                        f"{time_info}"
+                        f"\n\n• 预定义力矩：{self.predefined_force:.2f} N·m"
+                    )
+        except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "修复计算错误",
+                    f"计算修复时间时发生错误：\n{str(e)}"
                 )
-                if reply == QMessageBox.StandardButton.Yes:
-                    # 加入微小余量，避免数值边界问题
-                    theta_target = theta_loose + max(1e-6, theta_loose * 1e-3)
-                # 如果用户选择 No，则保持原目标 theta_target（但可能马上被判为松弦）
-        # 4. 强制设置 MechanicsEngine 状态
-        self.mechanics.reset(theta=theta_target, omega=0.0)
-
-        # 5. 强制更新 UI（一次完整更新）
-        self.apply_velocity(0.0,False)
-
-
-        QMessageBox.information(self, "校准成功",
-                                f"已将弦轴角度校准至目标频率 {self.target_freq:.2f} Hz 对应的角度 ({theta_target:.6f} rad)。")
-
 
     def _on_force_mode_clicked(self):
         """槽函数：打开施力方式配置窗口"""
+        # dialog = ForceModeDialog(
+        #     k_d=self.mechanics.k_d,
+        #     predef_force=self.predefined_force,
+        #     force_mode=self.force_mode,
+        #     parent=self
+        # )
         dialog = ForceModeDialog(
-            k_d=self.mechanics.k_d,
-            predef_force=self.predefined_force,
-            force_mode=self.force_mode,
-            parent=self
-        )
+                k_d=self.mechanics.k_d,
+                predef_force=self.predefined_force,
+                force_mode=self.force_mode,
+                repair_simulation_dt=self.mechanics.repair_simulation_dt,
+                max_repair_time=self.mechanics.max_repair_time,
+                parent=self
+            )
 
         if dialog.exec() == QDialog.Accepted:
             config = dialog.get_config()
@@ -138,6 +173,23 @@ class RightMechanicsPanel(QWidget):
             self.mechanics.k_d = config["k_d"]
             self.predefined_force = config["predefined_force"]
             self.force_mode = config["force_mode"]
+
+
+            # 构建要传递给主窗口的参数字典
+            new_params = {
+               "mech_Kd": config["k_d"],
+               "predefined_force": config["predefined_force"],
+               "force_mode": config["force_mode"],
+               "repair_simulation_dt": config["repair_simulation_dt"],
+               "max_repair_time": config["max_repair_time"]
+            }
+            self.inform_mainwindow_params.emit(new_params)
+
+            # 更新修复时间参数
+            self.mechanics.set_repair_time_params(
+                config["repair_simulation_dt"],
+                config["max_repair_time"]
+            )
 
             self.apply_velocity(self.board.v_user) # 用新模式和参数更新一次状态
 
@@ -150,16 +202,17 @@ class RightMechanicsPanel(QWidget):
     #   MainWindow -> Panel (输入接口)
     # ===================================================
 
-
     def set_target_key(self,db_manager:StringCSVManager, new_key:PianoKey):
         """设置目标频率，供 MainWindow 调用"""
         self.target_freq = new_key.frequency
         self.dial.target_freq = new_key.frequency
 
         string_param=db_manager.get_string_parameters_by_id(new_key.key_id)
-        self.mechanics.L=string_param.get("length",self.mechanics.L)
-        self.mechanics.mu=string_param.get("density",self.mechanics.mu)
-        self.mechanics.set_initial_state_by_frequency(new_key.frequency)
+        if string_param is not None:
+            self.mechanics.L=string_param.get("length",self.mechanics.L)
+            self.mechanics.mu=string_param.get("density",self.mechanics.mu)
+            self.mechanics.r_string = string_param.get("r_string",self.mechanics.r_string) # 修改r_string
+            self.mechanics.set_initial_state_by_frequency(new_key.frequency)
 
 
         # 强制用新目标频率更新一次 UI
@@ -172,7 +225,7 @@ class RightMechanicsPanel(QWidget):
         # 提前计算theta，必须做！！
         self.mechanics.set_initial_state_by_frequency(freq)
 
-        state = self.mechanics.update( v_user=0.0,dt=0.01)
+        state = self.mechanics.update( v_user=0.0)
         self.current_state = state
         tension = state["tension"]
 
@@ -198,13 +251,14 @@ class RightMechanicsPanel(QWidget):
     def set_params(self, new_params: Dict[str, Any]):
         self.apply_velocity(0.0,False)
 
-        self.mechanics.update( v_user=0.0,dt=0.01)
+        self.mechanics.update( v_user=0.0)
 
         self.mechanics.update_physical_params(new_params)
+        self.predefined_force = new_params.get('predefined_force',self.predefined_force)
 
         self.apply_velocity(0.0,False)
 
-        self.mechanics.update( v_user=0.0,dt=0.01)
+        self.mechanics.update( v_user=0.0)
 
         # 更新鼠标设置
         if hasattr(self, "board"):
@@ -256,7 +310,7 @@ class RightMechanicsPanel(QWidget):
 
 
         # 1. 执行 MechanicsEngine 更新
-        state = self.mechanics.update(v_user=input_v, dt=0.01)
+        state = self.mechanics.update(v_user=input_v)
         # ---- 弦松警告（只提示一次） ----
         if warnings and state.get("loose", False):
             if not getattr(self, "_warned_loose", False):
@@ -278,17 +332,17 @@ class RightMechanicsPanel(QWidget):
         if warnings and state.get("broken", False):
             if not getattr(self, "_warned_broken", False):
                 T = state["tension"]
-                Tmax = state["max_tension"]
-                sigma = T / (math.pi * self.mechanics.r * self.mechanics.r)
+                Tmax = state["max_F"]
+                sigma = T / (math.pi * self.mechanics.r_string * self.mechanics.r_string) /self.mechanics.r
                 sigma_valid = self.mechanics.Sigma_valid
 
                 QMessageBox.critical(
                     self, "⚠ 断弦警告",
                     f"弦张力已超过材料允许极限！\n"
                     f"弦可能已经断裂，请立即停止调节。\n\n"
-                    f"当前张力 T：{T:.2f} N\n"
+                    f"当前张力 T：{T/self.mechanics.r:.2f} N\n"
                     f"断弦极限 T_max：{Tmax:.2f} N\n\n"
-                    f"当前应力 σ：{sigma:.2f} MPa\n"
+                    f"当前应力 σ：{sigma/1e6:.2f} MPa\n"
                     f"材料允许应力 σ_valid：{sigma_valid:.2f} MPa"
                 )
                 self._warned_broken = True
@@ -314,7 +368,7 @@ class RightMechanicsPanel(QWidget):
             freq=freq,
             target=self.target_freq,
             cents=cents,
-            tension=tension,
+            tension=tension/self.mechanics.r,
             theta=self.mechanics.theta,
             velocity=v_user, # 保持显示原始鼠标速度
             torque_apply=torque_display, # 显示施加扭矩的简化值
@@ -335,7 +389,7 @@ class RightMechanicsPanel(QWidget):
                 self.board.v_filtered = 0
 
                 # 力学引擎停止
-                self.mechanics.update(v_user=0, dt=0.01)
+                self.mechanics.update(v_user=0)
 
                 QMessageBox.information(
                     self, "🎉 调律完成",
@@ -410,9 +464,19 @@ class ParameterPanel(QFrame):
         super().__init__(parent)
         self.values = {}
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(300)
 
     def update_values(self, freq, target, cents, tension,theta, velocity,torque_apply,k_d):
+        # self.values = {
+        #     "当前频率": f"{freq:.2f} Hz",
+        #     "目标频率": f"{target:.2f} Hz",
+        #     "音分偏差": f"{cents:+.1f} cents",
+        #     "弦张力": f"{tension:.2f} N",
+        #     "螺丝角度": f"{theta:.2f} rad",
+        #     "输入速度": f"{velocity:+.4f} m/s",
+        #     "施加扭矩": f"{torque_apply:+.2f} Nm",
+        #     "当前k_d": f"{k_d} "
+        # }
         self.values = {
             "当前频率": f"{freq:.2f} Hz",
             "目标频率": f"{target:.2f} Hz",
@@ -421,7 +485,10 @@ class ParameterPanel(QFrame):
             "螺丝角度": f"{theta:.2f} rad",
             "输入速度": f"{velocity:+.4f} m/s",
             "施加扭矩": f"{torque_apply:+.2f} Nm",
-            "当前k_d": f"{k_d} "
+            "当前k_d": f"{k_d} ",
+            "预定义力矩": f"{self.parent().predefined_force if hasattr(self.parent(), 'predefined_force') else 0:.1f} Nm",
+            "模拟步长": f"{self.parent().mechanics.repair_simulation_dt*1000:.1f}ms" if self.parent().mechanics else "--",
+            "最大修复时间": f"{self.parent().mechanics.max_repair_time:.1f}s" if self.parent().mechanics else "--"
         }
         self.update()
 
@@ -612,16 +679,81 @@ class MouseAdjustBoard(QFrame):
 
 class ForceModeDialog(QDialog):
     """用于配置施力模式和相关参数的对话框"""
-    def __init__(self, k_d: float, predef_force: float, force_mode: str, parent=None):
+    def __init__(self, k_d: float, predef_force: float, force_mode: str,
+                repair_simulation_dt: float, max_repair_time: float,parent=None):
         super().__init__(parent)
         self.setWindowTitle("施力方式配置")
 
         self.k_d = k_d
         self.predef_force = predef_force
         self.force_mode = force_mode
+        self.repair_simulation_dt = repair_simulation_dt
+        self.max_repair_time = max_repair_time
 
         self._setup_ui()
 
+    # def _setup_ui(self):
+    #     main_layout = QVBoxLayout(self)
+
+    #     # 模式选择
+    #     mode_group = QGroupBox("施力模式选择")
+    #     mode_layout = QVBoxLayout(mode_group)
+
+    #     self.radio_speed = QRadioButton("速度映射模式 (D_dot → 力矩)")
+    #     self.radio_force = QRadioButton("预定义力模式 (D_dot → ±预定义力矩)")
+
+    #     mode_layout.addWidget(self.radio_speed)
+    #     mode_layout.addWidget(self.radio_force)
+
+    #     if self.force_mode == "speed_map":
+    #         self.radio_speed.setChecked(True)
+    #     else:
+    #         self.radio_force.setChecked(True)
+
+    #     main_layout.addWidget(mode_group)
+
+    #     # 参数配置
+    #     param_group = QGroupBox("参数配置")
+    #     form_layout = QFormLayout(param_group)
+
+    #     # 1. k_d 配置
+    #     self.input_k_d = QDoubleSpinBox()
+    #     self.input_k_d.setRange(0.01, 1000.0)
+    #     self.input_k_d.setDecimals(1)
+    #     self.input_k_d.setValue(self.k_d)
+    #     form_layout.addRow(QLabel("驱动增益 k_d (Nm·s/m):"), self.input_k_d)
+
+    #     # 2. 预定义力配置
+    #     self.input_predef_force = QDoubleSpinBox()
+    #     self.input_predef_force.setRange(0.01, 1000000)
+    #     self.input_predef_force.setDecimals(4)
+    #     self.input_predef_force.setValue(self.predef_force)
+    #     form_layout.addRow(QLabel("预定义力矩 (Nm):"), self.input_predef_force)
+
+    #     main_layout.addWidget(param_group)
+
+    #     # 按钮
+    #     button_layout = QHBoxLayout()
+    #     btn_save = QPushButton("确定")
+    #     btn_cancel = QPushButton("取消")
+
+    #     btn_save.clicked.connect(self.accept)
+    #     btn_cancel.clicked.connect(self.reject)
+
+    #     button_layout.addStretch(1)
+    #     button_layout.addWidget(btn_save)
+    #     button_layout.addWidget(btn_cancel)
+
+    #     main_layout.addLayout(button_layout)
+
+    # def get_config(self) -> Dict[str, Any]:
+    #     """返回新的配置"""
+    #     new_mode = "speed_map" if self.radio_speed.isChecked() else "predefined_force"
+    #     return {
+    #     "k_d": self.input_k_d.value(),
+    #     "predefined_force": self.input_predef_force.value(),
+    #     "force_mode": new_mode
+    #     }
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
 
@@ -648,18 +780,46 @@ class ForceModeDialog(QDialog):
 
         # 1. k_d 配置
         self.input_k_d = QDoubleSpinBox()
-        self.input_k_d.setRange(0.01, 1000.0)
+        self.input_k_d.setRange(0.01, 10000000.0)
         self.input_k_d.setDecimals(1)
         self.input_k_d.setValue(self.k_d)
         form_layout.addRow(QLabel("驱动增益 k_d (Nm·s/m):"), self.input_k_d)
 
         # 2. 预定义力配置
         self.input_predef_force = QDoubleSpinBox()
-        self.input_predef_force.setRange(0.01, 1000000)
+        self.input_predef_force.setRange(0.01, 10000000)
         self.input_predef_force.setDecimals(4)
         self.input_predef_force.setValue(self.predef_force)
         form_layout.addRow(QLabel("预定义力矩 (Nm):"), self.input_predef_force)
 
+        # 3. 修复时间模拟参数
+        repair_time_group = QGroupBox("修复时间计算参数")
+        repair_layout = QFormLayout(repair_time_group)
+
+        # 模拟步长
+        self.input_simulation_dt = QDoubleSpinBox()
+        self.input_simulation_dt.setRange(0.0001, 0.1)
+        self.input_simulation_dt.setDecimals(4)
+        self.input_simulation_dt.setSingleStep(0.0001)
+        self.input_simulation_dt.setValue(self.repair_simulation_dt)
+        self.input_simulation_dt.setSuffix(" s")
+        repair_layout.addRow(QLabel("模拟步长:"), self.input_simulation_dt)
+
+        # 最大模拟时间
+        self.input_max_repair_time = QDoubleSpinBox()
+        self.input_max_repair_time.setRange(10.0, 10000.0)
+        self.input_max_repair_time.setDecimals(1)
+        self.input_max_repair_time.setValue(self.max_repair_time)
+        self.input_max_repair_time.setSuffix(" s")
+        repair_layout.addRow(QLabel("最大模拟时间:"), self.input_max_repair_time)
+
+        # 信息标签
+        self.info_label = QLabel("较小的步长=更精确但计算更慢，较大的最大时间=能模拟更长的修复过程")
+        self.info_label.setWordWrap(True)
+        self.info_label.setStyleSheet("color: #666; font-size: 9px; padding: 5px;")
+        repair_layout.addRow(QLabel("说明:"), self.info_label)
+
+        form_layout.addRow(repair_time_group)
         main_layout.addWidget(param_group)
 
         # 按钮
@@ -680,9 +840,11 @@ class ForceModeDialog(QDialog):
         """返回新的配置"""
         new_mode = "speed_map" if self.radio_speed.isChecked() else "predefined_force"
         return {
-        "k_d": self.input_k_d.value(),
-        "predefined_force": self.input_predef_force.value(),
-        "force_mode": new_mode
+            "k_d": self.input_k_d.value(),
+            "predefined_force": self.input_predef_force.value(),
+            "force_mode": new_mode,
+            "repair_simulation_dt": self.input_simulation_dt.value(),
+            "max_repair_time": self.input_max_repair_time.value()
         }
 
  # ===============================================================

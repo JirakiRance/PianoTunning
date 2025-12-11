@@ -91,7 +91,8 @@ class StringCSVManager:
             try:
                 # 1. 写入文件头
                 with open(self.file_path, 'w', newline='', encoding='utf-8') as f:
-                    fieldnames = ['key_id', 'note_name', 'length', 'density']
+                    # fieldnames = ['key_id', 'note_name', 'length', 'density']
+                    fieldnames = ['key_id', 'note_name', 'length', 'density', 'r_string']
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
 
@@ -118,6 +119,7 @@ class StringCSVManager:
                     row['key_id'] = int(row['key_id'])
                     row['length'] = float(row['length'])
                     row['density'] = float(row['density'])
+                    row['r_string'] = float(row.get('r_string', 0.0004))  # 默认0.4mm
                     data.append(row)
         except Exception as e:
             print(f"读取 CSV 文件失败: {e}")
@@ -147,7 +149,8 @@ class StringCSVManager:
             params.sort(key=lambda x: x['key_id'])
 
             with open(self.file_path, 'w', newline='', encoding='utf-8') as f:
-                fieldnames = ['key_id', 'note_name', 'length', 'density']
+                # fieldnames = ['key_id', 'note_name', 'length', 'density']
+                fieldnames = ['key_id', 'note_name', 'length', 'density', 'r_string']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
 
                 writer.writeheader()

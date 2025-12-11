@@ -70,15 +70,15 @@ class PianoConfigWidget(QWidget):
         # 参数列表: I, r, k (劲度系数)
 
         # a. 弦轴转动惯量 I (kg·m²)
-        self.input_I = self._create_double_spin_box(self.current_params.get('mech_I', 0.0001), 0.0, 1000.0, 5)
+        self.input_I = self._create_double_spin_box(self.current_params.get('mech_I', 10.0), 0.0, 1000.0, 5)
         form_layout.addRow(QLabel("转动惯量 I (kg·m²):"), self.input_I)
 
         # b. 弦轴半径 r (m)
-        self.input_r = self._create_double_spin_box(self.current_params.get('mech_r', 0.005), 0.001, 0.5, 4)
+        self.input_r = self._create_double_spin_box(self.current_params.get('mech_r', 0.20), 0.001, 0.5, 4)
         form_layout.addRow(QLabel("弦轴半径 r (m):"), self.input_r)
 
         # c. 弦劲度系数 k (N/m) (用于计算张力变化)
-        self.input_k = self._create_double_spin_box(self.current_params.get('mech_k', 500000.0), 1.0, 100000000.0, 0)
+        self.input_k = self._create_double_spin_box(self.current_params.get('mech_k', 20.0), 1.0, 100000000.0, 0)
         form_layout.addRow(QLabel("弦劲度系数 k (N/m):"), self.input_k)
 
 
@@ -89,7 +89,7 @@ class PianoConfigWidget(QWidget):
         main_layout.addWidget(general_group)
 
         # 2. 琴弦数据库入口 (L 和 μ)
-        database_group = QGroupBox("琴弦参数文件 (L&μ)")
+        database_group = QGroupBox("琴弦参数文件")
         db_layout = QVBoxLayout(database_group)
 
         # # 占位符：用于未来加载/编辑数据库
@@ -128,7 +128,7 @@ class PianoConfigWidget(QWidget):
         path_layout.addWidget(self.btn_edit_file, 1, 1) # 编辑按钮放在右侧
 
         db_layout.addLayout(path_layout)
-        db_layout.addWidget(QLabel("注：文件存储了每根琴弦的长度 L 和线密度 μ。"))
+        db_layout.addWidget(QLabel("注：文件含每根弦的长度L、线密度μ和弦半径r_string。"))
 
         main_layout.addWidget(database_group)
 
@@ -183,7 +183,8 @@ class PianoConfigWidget(QWidget):
         # -----------------------------------------------------------
 
         # 必需字段列表
-        required_fields = ['key_id', 'note_name', 'length', 'density']
+        # required_fields = ['key_id', 'note_name', 'length', 'density']
+        required_fields = ['key_id', 'note_name', 'length', 'density', 'r_string']
 
         try:
             with open(file_path, 'r', newline='', encoding='utf-8') as f:
@@ -249,6 +250,7 @@ class PianoConfigWidget(QWidget):
                         int(row['key_id'])
                         float(row['length'])
                         float(row['density'])
+                        float(row['r_string'])
                     except ValueError:
                         print(f"数据校验失败: 第 {row_count + 1} 行，'key_id', 'length', 或 'density' 包含无效的非数字字符。")
                         return False
@@ -312,7 +314,7 @@ class PianoConfigWidget(QWidget):
 
         # 默认起始路径为当前活动路径或默认路径
         initial_path = os.path.dirname(self.db_manager.file_path)
-        default_name = "custom_strings.csv"
+        default_name = "Piano-custom_strings.csv"
 
         # 弹出保存对话框让用户指定路径和名称 (SaveFileName)
         file_path, _ = QFileDialog.getSaveFileName(
@@ -456,7 +458,8 @@ class PianoConfigWidget(QWidget):
 
         # .强制校验当前琴弦数据文件
         current_path = self.db_manager.get_connected_path()
-        required_fields = ['key_id', 'note_name', 'length', 'density']
+        # required_fields = ['key_id', 'note_name', 'length', 'density']
+        required_fields = ['key_id', 'note_name', 'length', 'density', 'r_string']
 
         # 1. 校验文件头
         if not self._is_file_valid(current_path):
@@ -494,7 +497,8 @@ class PianoConfigWidget(QWidget):
         """当用户尝试关闭窗口时调用的方法"""
         current_path = self.db_manager.get_connected_path()
         # 1. 执行最终校验
-        required_fields = ['key_id', 'note_name', 'length', 'density']
+        # required_fields = ['key_id', 'note_name', 'length', 'density']
+        required_fields = ['key_id', 'note_name', 'length', 'density', 'r_string']
         if self._is_file_valid(current_path) and self._is_data_valid(current_path,required_fields):
             # 校验成功，允许关闭
             self.request_close.emit(True)
@@ -524,7 +528,7 @@ class PianoConfigWidget(QWidget):
         """使用内部静态数据重建默认的 strings.csv 文件"""
         try:
          # 假设 STATIC_DEFAULT_STRING_DATA 在 StringCSVManager.py 中被导入或定义
-         from StringCSVManager import STATIC_DEFAULT_STRING_DATA
+         from ConfigManager import STATIC_DEFAULT_STRING_DATA
 
          # 确保重建到默认路径
          self.db_manager.file_path = self.db_manager.default_file_path

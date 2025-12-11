@@ -25,6 +25,7 @@ class UserStatusCard(QFrame):
         self.setObjectName("UserStatusCard")
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setMinimumHeight(200)
+        self.setMaximumWidth(280)
 
         # 外观样式（卡片风）
         self.setStyleSheet("""
@@ -69,12 +70,15 @@ class UserStatusCard(QFrame):
             lab = QLabel(text)
             lab.setProperty("class", "status-key")
             lab.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            lab.setMinimumWidth(60)  # 固定键列宽度
             return lab
 
         def make_value_label(text: str = "--") -> QLabel:
             lab = QLabel(text)
             lab.setProperty("class", "status-value")
             lab.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            lab.setWordWrap(True)  # 允许换行
+            lab.setMaximumWidth(180)  # 限制值列宽度
             return lab
 
         row = 0
@@ -169,10 +173,12 @@ class UserStatusCard(QFrame):
 
         main_layout.addWidget(self.progress_bar)
 
+
     # ========= 对外接口（给 MainWindow 调用）=========
 
     def set_input_device(self, name: str):
         self.lbl_input_device.setText(name or "默认输入设备")
+        self.set_status_message(f"音频设备: {name}")
 
     def set_mode(self, text: str):
         self.lbl_mode.setText(text)
@@ -214,6 +220,8 @@ class UserStatusCard(QFrame):
 
     def show_progress(self, visible: bool):
         self.progress_bar.setVisible(visible)
+
+
 
 
 

@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>images/NannoAlice01.png</file>
+        <file>images/PianoTuningCover.png</file>
     </qresource>
 </RCC>

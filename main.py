@@ -7,6 +7,7 @@ import sys
 import os
 
 
+
 # ----------------------------
 # 资源定位函数（PyInstaller 必须）
 # ----------------------------
@@ -19,6 +20,53 @@ def resource_path(relative_path: str):
     else:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
+
+# ----------------------------------------------------
+# 1. 自动查找 fluidsynth/bin 目录（无论开发环境 or EXE）
+# ----------------------------------------------------
+def locate_fluidsynth_bin():
+    """
+    查找 fluidsynth DLL 所在目录：
+    - 打包后：_MEIPASS/tools/fluidsynth/bin
+    - 开发环境：项目根目录/tools/fluidsynth/bin
+    """
+    # 先查 _MEIPASS
+    if hasattr(sys, "_MEIPASS"):
+        path = os.path.join(sys._MEIPASS, "tools", "fluidsynth", "bin")
+        if os.path.isdir(path):
+            return path
+
+    # 开发环境路径
+    base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "tools", "fluidsynth", "bin")
+
+    if os.path.isdir(path):
+        return path
+
+    return None
+# ----------------------------------------------------
+# 2. 将 fluidsynth/bin 添加到 DLL 搜索路径（核心）
+# ----------------------------------------------------
+def setup_fluidsynth_dll_path():
+    dll_dir = locate_fluidsynth_bin()
+    if dll_dir and os.path.isdir(dll_dir):
+        try:
+            os.add_dll_directory(dll_dir)
+            os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
+            print("已加入 fluidsynth DLL 搜索路径:", dll_dir)
+        except Exception as e:
+            print("无法加入 DLL 搜索路径:", e)
+    else:
+        print("未找到 fluidsynth/bin 目录，请检查路径")
+
+setup_fluidsynth_dll_path()
+
+
+
+if getattr(sys, 'frozen', False):
+    exe_dir = sys._MEIPASS
+    os.add_dll_directory(exe_dir)
+    os.environ["PATH"] = exe_dir + os.pathsep + os.environ.get("PATH", "")
 
 
 
@@ -49,6 +97,9 @@ def resource_path(relative_path: str):
 # ----------------------------------------------------
 # 路径设置 - 添加所有必要的路径
 # ----------------------------------------------------
+
+
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ui_path = resource_path("UI")
 src_path = resource_path("src")
@@ -77,14 +128,16 @@ if not os.path.exists(mainwindow_path):
 
 # 导入编译后的资源文件
 try:
-    import res_rc  # 这会注册qrc中的资源
+    #import res_rc  # 这会注册qrc中的资源
+    import rc_res
     print("成功导入资源文件")
 except ImportError as e:
     print(f"资源文件导入失败: {e}")
 
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication,QSplashScreen
+from PySide6.QtGui import QIcon,QPixmap
+from PySide6.QtCore import Qt,QTimer
 
 
 # try:
@@ -131,12 +184,50 @@ if MainWindow is None:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setApplicationName("千椻调音")
-    #app.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
+    app.setApplicationName("钢琴调律辅助系统")
     icon_path = resource_path(":/images/NannoAlice01.png")
     app.setWindowIcon(QIcon(icon_path))
     app.setApplicationVersion("1.0.0")
-    window = MainWindow()
-    window.resize(1400,750)
-    window.show()
+
+
+    # ======================================================
+    # 创建 Splash Screen（启动封面）
+    # ======================================================
+    pix = QPixmap(":/images/PianoTuningCover.png")
+
+    scaled_pix = pix.scaled(
+        pix.width() // 4,
+        pix.height() // 4,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation
+    )
+
+
+    splash = QSplashScreen(scaled_pix, Qt.WindowStaysOnTopHint)
+    splash.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    splash.show()  # 显示封面
+
+    # 强制刷新
+    app.processEvents()
+
+    # ======================================================
+    # 启动主窗口（延迟 500ms，让封面至少显示一下）
+    # ======================================================
+    def load_main_window():
+        window = MainWindow()
+        window.resize(1400, 800)
+        window.show()
+
+        splash.finish(window)  # 关闭封面窗口
+
+    # 延迟执行主窗口
+    QTimer.singleShot(1000, load_main_window)
+
+
+    # window = MainWindow()
+    # window.resize(1400,800)
+    # window.show()
+
+
+
     sys.exit(app.exec())

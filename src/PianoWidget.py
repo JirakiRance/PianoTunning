@@ -33,10 +33,12 @@ class PianoWidget(QWidget):
         # 允许接收鼠标点击事件
         self.setMouseTracking(False)
         self.setMinimumHeight(150)
+        self.setMinimumWidth(600)
         self.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Expanding # QSizePolicy 需在主文件中导入
         )
+
 
 
     def resizeEvent(self, event):

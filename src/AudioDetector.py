@@ -298,6 +298,66 @@ class AudioDetector:
         """获取当前算法"""
         return self.current_algorithm
 
+    # ======================1129新增设备选择接口==========================
+    @staticmethod
+    def get_audio_input_devices():
+        """获取所有可用的音频输入设备"""
+        try:
+            devices = sd.query_devices()
+            input_devices = []
+
+            for i, device in enumerate(devices):
+                # 检查是否是输入设备（输入通道数 > 0）
+                if device.get('max_input_channels', 0) > 0:
+                    input_devices.append({
+                        'index': i,
+                        'name': device.get('name', f'Device {i}'),
+                        'channels': device.get('max_input_channels', 1),
+                        'sample_rate': device.get('default_samplerate', 44100),
+                        'hostapi': device.get('hostapi', 0)
+                    })
+            return input_devices
+        except Exception as e:
+            print(f"获取音频设备列表失败: {e}")
+            return []
+
+    @staticmethod
+    def get_default_input_device():
+        """获取默认输入设备索引"""
+        try:
+            return sd.default.device[0]  # 输入设备索引
+        except:
+            return 0
+
+    def set_input_device(self, device_index):
+        """设置输入设备"""
+        try:
+            # 验证设备是否存在
+            devices = self.get_audio_input_devices()
+            device_exists = any(device['index'] == device_index for device in devices)
+
+            if not device_exists:
+                print(f"设备 {device_index} 不存在")
+                return False
+
+            self.input_device = device_index
+
+            # 如果正在录音，需要重启音频流
+            if self.is_recording and self.audio_stream:
+                was_recording = True
+                self.stop_realtime_analysis()
+                time.sleep(0.1)  # 短暂延迟确保完全停止
+                self.start_realtime_analysis(self.pitch_callback, True, self.target_frequency)
+            else:
+                was_recording = False
+
+            print(f"输入设备已切换到: {device_index}")
+            return True
+
+        except Exception as e:
+            print(f"设置输入设备失败: {e}")
+            return False
+
     # ==================== 私有方法 ====================
 
     def _ensure_output_dir(self):

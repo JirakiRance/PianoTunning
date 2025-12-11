@@ -46,6 +46,7 @@ import numpy as np
 from datetime import datetime
 from typing import Dict,Any
 import math
+import sounddevice as sd
 
 # 导入音频检测模块
 try:
@@ -62,6 +63,7 @@ from ToneLibraryDialog import ToneLibraryDialog
 from SampleRateConfigWidget import SampleRateDialog
 from UserStatusCard import UserStatusCard,DebugStatusWindow
 from MouseSmoothConfigDialog import MouseSmoothConfigDialog
+from ExportRepairTimeDialog import ExportRepairTimeDialog
 # 频谱绘制模块
 try:
     from SpectrumWidget import SpectrumWidget
@@ -84,7 +86,13 @@ try:
 except ImportError as e:
     print(f"导入 PianoWidget 失败: {e}")
 
-
+# 导入音频输入设备
+try:
+    from AudioDeviceDialog import AudioDeviceDialog
+    AUDIO_DEVICE_DIALOG_AVAILABLE = True
+except ImportError as e:
+    print(f"导入 AudioDeviceDialog 失败: {e}")
+    AUDIO_DEVICE_DIALOG_AVAILABLE = False
 
 # 导入RightMechanicsPanel
 try:
@@ -159,7 +167,7 @@ class MainWindow(QMainWindow):
         # A. 力学参数
         self.mech_I = self.config_data.get('mech_I', 0.0001)    # 转动惯量 I (kg·m²)
         self.mech_r = self.config_data.get('mech_r', 0.005)     # 弦轴半径 r (m)
-        self.mech_k = self.config_data.get('mech_k', 500000.0)  # 琴弦劲度系数 k (N/m) (用于张力/角度转换)
+        self.mech_k = self.config_data.get('mech_k', 2000.0)  # 琴弦劲度系数 k (N/m) (用于张力/角度转换)
         self.mech_Sigma_valid = self.config_data.get('mech_Sigma_valid',210000)  # 许用应力
         self.mech_Kd = self.config_data.get('mech_Kd', 0.5)     # 施力敏感度 K_D (N·m·s/rad)
         # 摩擦模型参数 (保持默认值或从配置加载)
@@ -169,6 +177,13 @@ class MainWindow(QMainWindow):
         self.mech_kinetic = self.config_data.get('mech_kinetic', 0.08)      # 动摩擦扭矩 τ_kinetic (N·m)
         self.mech_sigma = self.config_data.get('mech_sigma', 0.001)         # 粘性摩擦系数 σ (N·m·s/rad)
         self.mech_gamma = self.config_data.get('mech_gamma',0.9)            # 动静摩擦转化比
+        self.friction_model = self.config_data.get('friction_model',"linear")
+        self.custom_fric_csv_path = self.config_data.get('custom_fric_csv_path',None)
+        self.custom_interp_method = self.config_data.get('custom_interp_method',None)
+
+        # 步长
+        self.repair_simulation_dt=self.config_data.get('repair_simulation_dt',0.01)
+        self.max_repair_time = self.config_data.get('max_repair_time',10.0)
         # B. CSV Manager 路径
         self.db_manager = None
         if StringCSVManager:
@@ -287,6 +302,7 @@ class MainWindow(QMainWindow):
 
         # 力学引擎
         self.inform_right_params(self.config_data)
+        self.inform_right_current(self.target_freq)
 
         # 初始化 UserStatusCard（用户可见状态卡）
         # self.status_card.set_input_device(self.audio_detector.input_device)
@@ -350,16 +366,28 @@ class MainWindow(QMainWindow):
             try:
                 # 获取默认录音输出路径
                 output_dir = self._get_default_recording_path()
+
+                # 从配置中获取输入设备，如果没有则使用默认设备
+                input_device = self.config_data.get('audio_input_device')
+                if input_device is None:
+                    # 使用sounddevice的默认输入设备
+                    try:
+                       input_device = sd.default.device[0]
+                    except:
+                       input_device = 0
+
                 # 使用默认参数初始化 AudioDetector
                 self.audio_detector = AudioDetector(
                     sample_rate=44100,
                     frame_length=8192,
                     hop_length=512,
                     # 可以根据配置界面选择输入设备，这里先用默认设备2
-                    input_device=2,
+                    input_device=input_device,
                     pitch_algorithm=PitchDetectionAlgorithm.AUTOCORR, # 默认使用AUTOCORR,有一定准确度，且响应极快
                     output_dir=output_dir
                 )
+                # 获取设备名称用于状态显示
+                device_name = self._get_current_device_name(input_device)
                 self.update_status("音频系统初始化成功，算法：AUTOCORR")
 
                 # 连接自定义信号到主线程槽函数
@@ -371,9 +399,20 @@ class MainWindow(QMainWindow):
         else:
             self.update_status("音频模块不可用，请检查依赖库")
 
+    def _get_current_device_name(self, device_index):
+        """获取当前音频设备的名称"""
+        try:
+            devices = AudioDetector.get_audio_input_devices()
+            for device in devices:
+                if device['index'] == device_index:
+                    return device['name']
+            return f"设备 {device_index}"
+        except:
+            return f"设备 {device_index}"
+
     def setup_ui(self):
         """设置主界面"""
-        self.setWindowTitle("千椻")
+        self.setWindowTitle("钢琴调律辅助系统")
         #self.setWindowIcon(QIcon("E:/Resources/images/acgs/NanoAlice01.png"))
         self.setWindowIcon(QIcon(":/images/NannoAlice01.png"))
         self.setGeometry(100, 100, 1400, 900)
@@ -768,7 +807,14 @@ class MainWindow(QMainWindow):
         self.action_kd_config.triggered.connect(self._open_kd_config_dialog)
         # params_menu.addAction(self.action_kd_config)
         # ------------------------
+        # 导出菜单
+        export_menu = menubar.addMenu("导出(&E)")
 
+        action_export_repair = QAction("导出修复时间", self)
+        action_export_repair.triggered.connect(self._open_export_repair_dialog)
+        export_menu.addAction(action_export_repair)
+
+        # --------------------------
         # 设置菜单
         settings_menu = menubar.addMenu("设置(&S)")
 
@@ -886,6 +932,11 @@ class MainWindow(QMainWindow):
         # 添加分隔线，区分不同类别的设置.其上为选择项，其下为直接设置项
         settings_menu.addSeparator()
 
+        # 音频输入设备选择
+        self.action_audio_device = QAction("音频输入设备", self)
+        self.action_audio_device.triggered.connect(self._open_audio_device_dialog)
+        settings_menu.addAction(self.action_audio_device)
+
         # 采样率
         action_set_samplerate = QAction("设置采样率", self)
         action_set_samplerate.triggered.connect(self._open_samplerate_dialog)
@@ -916,16 +967,6 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.action_toggle_save_prompt)
 
         # 帮助菜单
-        # help_menu = menubar.addMenu("帮助(&H)")
-        # help_menu.addAction("软件使用说明")
-        # help_menu.addAction("力学系统说明")
-        # help_menu.addAction("音高检测算法说明")
-        # help_menu.addSeparator()
-        # help_menu.addAction("项目报告")
-        # help_menu.addAction("开题报告")
-        # help_menu.addAction("开题PPT")
-        # help_menu.addSeparator()
-        # help_menu.addAction("关于")
         help_menu = menubar.addMenu("帮助(&H)")
 
         act_manual = QAction("软件使用说明", self)
@@ -940,24 +981,81 @@ class MainWindow(QMainWindow):
         act_pitch.triggered.connect(lambda: self.open_help_doc("音高检测算法说明"))
         help_menu.addAction(act_pitch)
 
-        help_menu.addSeparator()
 
-        act_report = QAction("项目报告", self)
-        act_report.triggered.connect(lambda: self.open_help_doc("项目报告"))
+        act_report = QAction("项目开发报告", self)
+        act_report.triggered.connect(lambda: self.open_help_doc("项目开发报告"))
         help_menu.addAction(act_report)
 
+        help_menu.addSeparator()
+
         act_start_report = QAction("开题报告", self)
-        act_start_report.triggered.connect(lambda: self.open_help_doc("开题报告"))
+        act_start_report.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-开题报告"))
         help_menu.addAction(act_start_report)
 
+        act_keshe_report = QAction("课程设计报告", self)
+        act_keshe_report.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-课程设计报告"))
+        help_menu.addAction(act_keshe_report)
+
         act_start_ppt = QAction("开题PPT", self)
-        act_start_ppt.triggered.connect(lambda: self.open_help_doc("开题PPT"))
+        act_start_ppt.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-开题PPT"))
         help_menu.addAction(act_start_ppt)
 
         help_menu.addSeparator()
 
-        help_menu.addAction("关于")
+        act_video = QAction("视频教程", self)
+        act_video.triggered.connect(lambda: self.open_help_doc("视频教程"))
+        help_menu.addAction(act_video)
 
+    def _open_export_repair_dialog(self):
+        """打开修复时间批量导出窗口"""
+        #dlg = ExportRepairTimeDialog(mechanics=self.right_panel.mechanics, parent=self)
+        dlg = ExportRepairTimeDialog(
+        main_right_panel=self.right_panel,
+        piano_generator=self.piano_generator,
+        current_key_id = self.target_key.key_id,
+        db_manager=self.db_manager,
+        parent=self
+        )
+        dlg.exec()
+
+
+    def _open_audio_device_dialog(self):
+        """打开音频输入设备选择对话框"""
+        if not AUDIO_DEVICE_DIALOG_AVAILABLE:
+            QMessageBox.critical(self, "错误", "音频设备选择模块未找到。")
+            return
+
+        # 获取当前设备索引
+        current_device = self.config_data.get('audio_input_device')
+        if current_device is None:
+            try:
+                current_device = sd.default.device[0]
+            except:
+                current_device = 0
+
+        dialog = AudioDeviceDialog(current_device, self)
+        if dialog.exec() == QDialog.Accepted:
+            new_device_index = dialog.get_selected_device_index()
+
+            # 更新配置
+            self.config_data['audio_input_device'] = new_device_index
+            self.config_manager.save_config(self.config_data)
+
+            # 重新初始化音频系统
+            if self.audio_detector:
+                # 如果正在录音，先停止
+                if self.audio_detector.is_recording:
+                    self.on_stop_recording()
+
+                # 重新初始化音频检测器
+                self.init_audio_system()
+
+            device_name = self._get_current_device_name(new_device_index)
+            self.update_status(f"音频输入设备已切换到: {device_name}")
+
+            # 更新状态卡片显示
+            if self.status_card:
+                self.status_card.set_input_device(device_name)
 
     def open_random_tuning(self):
         from RandomTuningDialog import RandomTuningDialog
@@ -1236,6 +1334,16 @@ class MainWindow(QMainWindow):
             self.mech_kinetic = new_params.get('mech_kinetic', self.mech_kinetic)
             self.mech_sigma = new_params.get('mech_sigma', self.mech_sigma)
             self.mech_gamma = new_params.get('mech_gamma',self.mech_gamma)
+            self.friction_model = new_params.get('friction_model',self.friction_model)
+            self.custom_fric_csv_path = new_params.get('custom_fric_csv_path',self.custom_fric_csv_path)
+            self.custom_interp_method = new_params.get('custom_interp_method',self.custom_interp_method)
+
+
+            # right
+            self.repair_simulation_dt=new_params.get('repair_simulation_dt',self.repair_simulation_dt)
+            self.max_repair_time=new_params.get('max_repair_time',self.max_repair_time)
+
+
 
             # 更新 StringCSVManager 的文件路径
             new_db_path = new_params.get('db_file_path')
@@ -1252,12 +1360,14 @@ class MainWindow(QMainWindow):
 
             self.update_status("物理参数已更新并保存。")
 
-
             self.inform_right_params(new_params)
+
 
         except Exception as e:
             self.update_status(f"更新参数失败: {e}")
             QMessageBox.critical(self, "更新错误", f"更新钢琴参数失败:\n{e}")
+            import traceback
+            traceback.print_exc()
     # 占位置用
     # def _open_friction_config_dialog(self):
     #     """打开摩擦模型配置对话框（包括模型选择和参数）"""
@@ -1284,7 +1394,10 @@ class MainWindow(QMainWindow):
             'mech_alpha': self.mech_alpha,
             'mech_kinetic': self.mech_kinetic,
             'mech_sigma': self.mech_sigma,
-            'mech_gamma': self.mech_gamma
+            'mech_gamma': self.mech_gamma,
+            'friction_model':self.friction_model,
+            'custom_fric_csv_path':self.custom_fric_csv_path,
+            'custom_interp_method':self.custom_interp_method
         }
 
         dialog = QDialog(self)
@@ -1418,6 +1531,8 @@ class MainWindow(QMainWindow):
             # 2. 连接 PianoWidget 鼠标点击事件
             self.piano_widget.key_clicked.connect(self.on_note_selector_changed) # 鼠标点击也使用相同的槽函数
 
+        if self.right_panel:
+            self.right_panel.inform_mainwindow_params.connect(self._update_global_physics_params)
         # if hasattr(self, "piano_widget"):
         #     # 点击钢琴键时播放声音
         #     # self.piano_widget.key_clicked.connect(
@@ -2257,7 +2372,11 @@ class MainWindow(QMainWindow):
         config['mech_kinetic'] = self.mech_kinetic
         config['mech_sigma'] = self.mech_sigma
         config['mech_gamma'] = self.mech_gamma
-
+        config['max_repair_time']=self.max_repair_time
+        config['repair_simulation_dt']=self.repair_simulation_dt
+        config['friction_model'] = self.friction_model
+        config['custom_interp_method'] = self.custom_interp_method
+        config['custom_fric_csv_path'] = self.custom_fric_csv_path
         # -----------------------------
         # CSV 文件路径
         # -----------------------------
@@ -2315,16 +2434,27 @@ class MainWindow(QMainWindow):
         # 1. 构造路径
         md_path = os.path.join(HELP_FOLDER, f"{base_name}.md")
         pdf_path = os.path.join(HELP_FOLDER, f"{base_name}.pdf")
-        doc_path = os.path.join(HELP_FOLDER, f"{base_name}.doc")  # 给开题报告用
-        ppt_path = os.path.join(HELP_FOLDER, f"{base_name}.ppt")  # 给开题PPT用
+        doc_path = os.path.join(HELP_FOLDER, f"{base_name}.docx")
+        ppt_path = os.path.join(HELP_FOLDER, f"{base_name}.pptx")
+        video_path = os.path.join(HELP_FOLDER, f"{base_name}.mov")
+        video_url="https://www.bilibili.com/video/BV17Z27B8EjL/"
+
+        # 如果是视频教程，先查找本地视频
+        if base_name == "视频教程":
+            if os.path.exists(video_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(video_path))
+                return
+            # 本地没有,打开链接
+            QDesktopServices.openUrl(QUrl(video_url))
+            return
 
         # 2. 依次尝试
-        if os.path.exists(md_path):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(md_path))
-            return
 
         if os.path.exists(pdf_path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
+            return
+        if os.path.exists(md_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(md_path))
             return
 
         if os.path.exists(doc_path):

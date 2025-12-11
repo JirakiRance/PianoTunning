@@ -436,7 +436,7 @@ class AudioEngine:
     def load_sf2(self, sf2_path, bank=0, preset=0):
         """加载一个独立 SF2，用系统声音直接播放"""
         if not FLUIDSYNTH_AVAILABLE:
-            raise RuntimeError("未安装 pyfluidsynth")
+            raise RuntimeError("未安装 fluidsynth")
 
         if not os.path.isfile(sf2_path):
             raise ValueError("SF2 文件不存在")
