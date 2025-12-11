@@ -1696,14 +1696,11 @@ class MainWindow(QMainWindow):
                     )
                     self.status_card.set_status_message("文件分析完成")
 
-
-
-
-
                 # 3. 绘制整体波形图 (文件分析的核心可视化)
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
                     # 传入完整的音频数据，并标记为整体图模式 (is_full_file=True)
-                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+                    # self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True,dominant_freq=analysis_result.dominant_frequency)
                 else:
                     self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
                 # --- 调用后分析结果保存的处理逻辑 ---
@@ -1981,7 +1978,7 @@ class MainWindow(QMainWindow):
 
                 # 3. 绘制整体波形图
                 if hasattr(self, 'spectrum_widget') and analysis_result.full_audio_data is not None:
-                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True)
+                    self.spectrum_widget.update_frame(analysis_result.full_audio_data, is_full_file=True,dominant_freq=analysis_result.dominant_frequency)
                 else:
                     self.update_status("警告：无法绘制整体波形，SpectrumWidget或数据缺失。")
                 # --- 调用后保存分析结果的处理逻辑 ---
@@ -2061,7 +2058,7 @@ class MainWindow(QMainWindow):
             # 将实时帧数据传递给 SpectrumWidget 进行绘制
             # self.spectrum_widget.update_frame(audio_frame)
             # 传入实时帧数据，标记为实时模式
-            self.spectrum_widget.update_frame(audio_frame, is_full_file=False)
+            self.spectrum_widget.update_frame(audio_frame, is_full_file=False,dominant_freq=result.frequency)
         # 5.更新钢琴键盘高亮
         if self.piano_generator and result.confidence > 0.6: # 仅在高置信度时高亮
             closest_key = self.piano_generator.find_closest_key(result.frequency)
