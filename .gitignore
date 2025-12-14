@@ -78,5 +78,9 @@ soundsource/
 build/
 dist/
 venv/
-
+help/
+tools/
+images/
+oldfiles/
+history/
 

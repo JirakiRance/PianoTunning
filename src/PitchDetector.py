@@ -331,6 +331,58 @@ class PitchDetector:
             print(f"自相关算法错误: {e}")
             return None
 
+    #
+    def detect_fft(self, audio_data: np.ndarray,
+                   target_freq: Optional[float] = None
+                   ) -> Optional[PitchDetectionResult]:
+        """FFT 峰值法（快速 / 低稳定性，用于参考）"""
+        try:
+            if len(audio_data) < self.frame_length:
+                return None
+
+            # 能量门限
+            rms_energy = np.sqrt(np.mean(audio_data ** 2))
+            if rms_energy < 0.000005:
+                return None
+
+            # 加窗
+            window = np.hanning(len(audio_data))
+            windowed = audio_data * window
+
+            # FFT
+            spectrum = np.abs(np.fft.rfft(windowed))
+            freqs = np.fft.rfftfreq(len(windowed), 1.0 / self.sample_rate)
+
+            # 限定频率范围
+            valid_mask = (freqs >= self.f_min) & (freqs <= self.f_max)
+            if not np.any(valid_mask):
+                return None
+
+            spectrum_valid = spectrum[valid_mask]
+            freqs_valid = freqs[valid_mask]
+
+            # 找主峰
+            peak_idx = np.argmax(spectrum_valid)
+            frequency = freqs_valid[peak_idx]
+
+            if frequency <= 0:
+                return None
+
+            # —— 置信度估计——
+            peak_value = spectrum_valid[peak_idx]
+            mean_value = np.mean(spectrum_valid) + 1e-12
+            confidence = min(1.0, peak_value / (5.0 * mean_value))
+
+            return PitchDetectionResult(
+                frequency=float(frequency),
+                confidence=float(confidence),
+                method_used="fft"
+            )
+
+        except Exception as e:
+            print(f"FFT算法错误: {e}")
+            return None
+
     def detect_adaptive(self, audio_data: np.ndarray, target_freq: Optional[float] = None) -> Optional[
         PitchDetectionResult]:
         """自适应算法 - 组合多种方法"""
@@ -338,10 +390,10 @@ class PitchDetector:
         results = []
 
         methods = [
-            self.detect_pyin_enhanced,
             self.detect_yin,
             self.detect_hps,
-            self.detect_autocorr
+            self.detect_autocorr,
+            self.detect_fft
         ]
 
         for method in methods:
@@ -356,3 +408,5 @@ class PitchDetector:
         best_result = max(results, key=lambda x: x.confidence)
         best_result.method_used = f"adaptive({best_result.method_used})"
         return best_result
+
+

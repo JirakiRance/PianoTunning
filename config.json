@@ -14,7 +14,7 @@
     "settings_save_recording_file": true,
     "settings_max_recording_time": 10,
     "settings_accidental_type": "SHARP",
-    "settings_pitch_algorithm": "AUTOCORR",
+    "settings_pitch_algorithm": "FFT",
     "settings_standard_a4": 440,
     "audio_sample_rate": 48000,
     "audio_mode": "sine",

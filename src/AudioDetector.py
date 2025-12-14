@@ -29,7 +29,9 @@ class PitchDetectionAlgorithm(Enum):
     YIN = "yin"
     HPS = "hps"
     AUTOCORR = "autocorr"
+    FFT = "fft"
     ADAPTIVE = "adaptive"
+
 
 
 @dataclass
@@ -143,6 +145,7 @@ class AudioDetector:
             PitchDetectionAlgorithm.HPS: self.pitch_detector.detect_hps,
             PitchDetectionAlgorithm.AUTOCORR: self.pitch_detector.detect_autocorr,
             PitchDetectionAlgorithm.ADAPTIVE: self.pitch_detector.detect_adaptive,
+            PitchDetectionAlgorithm.FFT:self.pitch_detector.detect_fft,
         }
 
         self.current_algorithm = pitch_algorithm
@@ -786,6 +789,7 @@ def test_all_algorithms(test_file: str, target_frequency: float = 440.0):
         PitchDetectionAlgorithm.YIN,
         PitchDetectionAlgorithm.HPS,
         PitchDetectionAlgorithm.AUTOCORR,
+        PitchDetectionAlgorithm.FFT,
         PitchDetectionAlgorithm.ADAPTIVE
     ]
 
@@ -888,7 +892,7 @@ if __name__ == "__main__":
 
     # 测试有目标频率的情况
     print("测试开始")
-    test_all_algorithms(test_file_1614, 440.0)
+    test_all_algorithms(test_file_440, 440.0)
 
     # print("\n\n" + "=" * 80)
     # print("测试2: 无目标频率分析")

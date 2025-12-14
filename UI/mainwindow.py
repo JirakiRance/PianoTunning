@@ -156,10 +156,15 @@ class PitchSignal(QObject):
 
 #==================== 主窗口 ========================
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self,callback=None):
         # 0. UI 基础设置
         super().__init__()
         self.right_panel=None
+
+        # 进度汇报
+        self._launch_progress_callback = callback
+        self._report_progress(55, "正在加载配置…")
+
 
         # 0.5 参数配置
         self.config_manager = ConfigManager(project_root)
@@ -244,19 +249,25 @@ class MainWindow(QMainWindow):
         self.status_card = None
 
 
-
+        self._report_progress(60, "已加载配置参数")
         # 3. 初始化核心系统 (只声明，不进行状态更新)
         # 注意：这里调用 init_audio_system 和 init_piano_system 时，它们内部的 update_status 仍会失败。
         # 需要暂时修改这两个 init 方法，使其在调用 update_status 前检查 self.status_display 是否存在。
         self.init_piano_system()
+        self._report_progress(70, "钢琴系统初始化完成")
         self.init_audio_system()
+        self._report_progress(75, "录音系统初始化完成")
         self.init_audio_engine()
+        self._report_progress(80, "音频引擎初始化完成")
 
 
         # 4. UI 设置
         self.setup_ui()
+        self._report_progress(85, "界面布局加载完成")
         self.setup_menu_bar()
+        self._report_progress(90, "菜单加载完成")
         self.connect_signals()
+        self._report_progress(95, "信号系统准备就绪")
 
         # 5. UI 后续操作 (录音计时器等)
         self.record_timer = QTimer(self)
@@ -266,8 +277,19 @@ class MainWindow(QMainWindow):
 
         # 6. 最终状态初始化 (在这里统一刷新状态，取代之前分散的 update_status 调用)
         self._post_ui_init_status_update()
+        self._report_progress(99, "初始化完成")
 
-        print("status_card 是否创建成功:", hasattr(self, "status_card"), type(self.status_card))
+
+
+    # 初始化进度汇报
+    def set_launch_progress_callback(self, callback):
+        """用于 Splash 绑定进度更新函数"""
+        self._launch_progress_callback = callback
+    def _report_progress(self, percent, text=""):
+        """启动阶段统一进度上报（软件启动完后不会再触发）"""
+        if self._launch_progress_callback:
+            self._launch_progress_callback(percent, text)
+
 
 
     # 处理参数文件路径更新
