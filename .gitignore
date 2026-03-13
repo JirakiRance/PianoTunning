@@ -82,5 +82,13 @@ help/
 tools/
 images/
 oldfiles/
-history/
+
+*.txt
+*.md
+*.wav
+*.mov
+*.pdf
+*.pptx
+*.docx
+
 

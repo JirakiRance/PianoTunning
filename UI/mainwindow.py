@@ -1011,15 +1011,15 @@ class MainWindow(QMainWindow):
         help_menu.addSeparator()
 
         act_start_report = QAction("开题报告", self)
-        act_start_report.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-开题报告"))
+        act_start_report.triggered.connect(lambda: self.open_help_doc("开题报告"))
         help_menu.addAction(act_start_report)
 
         act_keshe_report = QAction("课程设计报告", self)
-        act_keshe_report.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-课程设计报告"))
+        act_keshe_report.triggered.connect(lambda: self.open_help_doc("课程设计报告"))
         help_menu.addAction(act_keshe_report)
 
         act_start_ppt = QAction("开题PPT", self)
-        act_start_ppt.triggered.connect(lambda: self.open_help_doc("923113370211-罗健玮-开题PPT"))
+        act_start_ppt.triggered.connect(lambda: self.open_help_doc("开题PPT"))
         help_menu.addAction(act_start_ppt)
 
         help_menu.addSeparator()
