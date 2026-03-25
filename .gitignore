@@ -82,6 +82,7 @@ help/
 tools/
 images/
 oldfiles/
+PT.pyproject.user
 
 *.txt
 *.md
